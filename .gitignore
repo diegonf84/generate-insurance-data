@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Generated output (reproducible via main.py)
+output/
+
+# Internal prompt/design docs
+prompt_data_sintetica.md
+
+# Exported notebooks
+*.html
+
+# macOS metadata
+.DS_Store
