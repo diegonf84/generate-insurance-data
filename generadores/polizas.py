@@ -14,18 +14,11 @@ from generadores.vehiculos import (
 
 # GBA municipalities that trigger barrios_gba assignment and Alta risk zone
 _GBA_LOCALIDADES: frozenset[str] = frozenset({
-    "San Isidro",
-    "Quilmes",
-    "Morón",
-    "Lomas de Zamora",
-    "Tigre",
-    "San Martín",
-    "Tres de Febrero",
-    "Lanús",
-    "Avellaneda",
-    "San Fernando",
-    "Merlo",
-    "Hurlingham",
+    "San Isidro", "Quilmes", "Morón", "Lomas de Zamora", "Tigre",
+    "San Martín", "Tres de Febrero", "Lanús", "Avellaneda", "San Fernando",
+    "Merlo", "Hurlingham", "Florencio Varela", "Berazategui", "Esteban Echeverría",
+    "Almirante Brown", "Ezeiza", "Ituzaingó", "Malvinas Argentinas", "José C. Paz",
+    "San Miguel", "Moreno", "Pilar", "Escobar", "Vicente López",
 })
 
 _CATEGORIA_COBERTURA: dict[str, str] = {
@@ -35,11 +28,19 @@ _CATEGORIA_COBERTURA: dict[str, str] = {
 }
 
 
-def _sample_weighted(rng: np.random.Generator, pesos: dict[str, float], n: int) -> np.ndarray:
+def _sample_weighted(rng: np.random.Generator, pesos: dict, n: int) -> np.ndarray:
     valores = np.array(list(pesos.keys()))
     probs = np.array(list(pesos.values()), dtype=float)
     probs = probs / probs.sum()
     return rng.choice(valores, size=n, p=probs)
+
+
+def _sample_weighted_single(rng: np.random.Generator, pesos: dict) -> object:
+    """Sample a single value from a weighted dict."""
+    valores = list(pesos.keys())
+    probs = np.array(list(pesos.values()), dtype=float)
+    probs = probs / probs.sum()
+    return rng.choice(valores, p=probs)
 
 
 def _sample_edad(rng: np.random.Generator, n: int) -> np.ndarray:
@@ -142,6 +143,63 @@ def ajustar_renovada_por_siniestros(
     base -= np.where(df_polizas["meses_en_mora"].values >= 2, 0.10, 0.0)
     base = np.clip(base, 0.20, 0.93)
     return pd.Series(rng.random(len(df_polizas)) < base)
+
+
+def aplicar_cancelaciones(
+    df_polizas: pd.DataFrame,
+    cfg: Config,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """Assign mid-term cancellations to a fraction of policies.
+
+    Adds columns: `cancelada`, `fecha_cancelacion`, `motivo_cancelacion`.
+    Cancelled policies also get `renovada = False`.
+    """
+    n = len(df_polizas)
+
+    # Base cancellation probability, elevated for high-mora policies
+    p_cancel = np.full(n, cfg.tasa_cancelacion_base)
+    mora_alta = df_polizas["meses_en_mora"].values >= cfg.mora_umbral_cancelacion
+    p_cancel[mora_alta] *= 2.5  # mora prolongada → mucho más probable
+
+    # Young drivers slightly more likely to cancel (change company)
+    joven = df_polizas["edad_asegurado"].values < 28
+    p_cancel[joven] *= 1.20
+
+    p_cancel = np.clip(p_cancel, 0.0, 0.50)
+    cancelada = rng.random(n) < p_cancel
+
+    df_polizas["cancelada"] = cancelada
+    df_polizas["fecha_cancelacion"] = pd.NaT
+    df_polizas["motivo_cancelacion"] = pd.NA
+
+    idx_cancel = df_polizas.index[cancelada]
+    if len(idx_cancel) > 0:
+        # Cancellation date: between 30 and 300 days after inicio
+        for idx in idx_cancel:
+            inicio = df_polizas.at[idx, "fecha_inicio_vigencia"]
+            fin = df_polizas.at[idx, "fecha_fin_vigencia"]
+            max_dias = max(30, (fin - inicio).days - 30)
+            lag = int(rng.integers(30, max_dias + 1))
+            df_polizas.at[idx, "fecha_cancelacion"] = pd.Timestamp(inicio + timedelta(days=lag))
+
+            # Assign motivo — mora prolongada gets biased toward "Mora prolongada"
+            if df_polizas.at[idx, "meses_en_mora"] >= cfg.mora_umbral_cancelacion:
+                if rng.random() < 0.65:
+                    df_polizas.at[idx, "motivo_cancelacion"] = "Mora prolongada"
+                else:
+                    df_polizas.at[idx, "motivo_cancelacion"] = str(
+                        _sample_weighted_single(rng, cfg.pesos_motivo_cancelacion)
+                    )
+            else:
+                df_polizas.at[idx, "motivo_cancelacion"] = str(
+                    _sample_weighted_single(rng, cfg.pesos_motivo_cancelacion)
+                )
+
+        # Cancelled policies are never renewed
+        df_polizas.loc[cancelada, "renovada"] = False
+
+    return df_polizas
 
 
 def generar_polizas(cfg: Config, seed: int | None = None) -> pd.DataFrame:
@@ -285,4 +343,126 @@ def generar_polizas(cfg: Config, seed: int | None = None) -> pd.DataFrame:
     prob_base_renov = np.clip(prob_base_renov, 0.20, 0.93)
     df["renovada"] = rng.random(n) < prob_base_renov
 
+    # ── NEW: Renewal chains / cohortes ──────────────────────────────────────
+    # Assign id_cliente and numero_renovacion.
+    # Strategy: group policies into client chains. Policies in the same chain
+    # share vehicle, province, and demographic profile. Later periods have
+    # adjusted primas and progressing ages.
+    _asignar_cadenas_renovacion(df, cfg, rng)
+
+    # ── NEW: Cancellations (applied after chains so the chain is visible) ───
+    aplicar_cancelaciones(df, cfg, rng)
+
     return df
+
+
+def _asignar_cadenas_renovacion(
+    df: pd.DataFrame,
+    cfg: Config,
+    rng: np.random.Generator,
+) -> None:
+    """Assign id_cliente and numero_renovacion to create cohort chains.
+
+    Modifies `df` in place. The approach:
+    1. Determine how many unique clients we need so that
+       sum(periods_per_client) ≈ len(df).
+    2. Assign each row to a client, grouping rows that share similar
+       attributes (same tipo_vehiculo, provincia, similar edad).
+    3. Within each client, order by fecha_inicio and assign
+       numero_renovacion = 0, 1, 2, ...
+    4. Adjust prima on renewals to reflect inflation/experience.
+    """
+    n = len(df)
+    pesos_per = cfg.pesos_periodos_cliente
+    periodos = np.array(list(pesos_per.keys()))
+    probs = np.array(list(pesos_per.values()), dtype=float)
+    probs = probs / probs.sum()
+
+    # Estimate number of unique clients needed
+    media_periodos = float(np.sum(periodos * probs))
+    n_clientes = int(round(n / media_periodos))
+
+    # Sample how many periods each client has
+    periodos_por_cliente = rng.choice(periodos, size=n_clientes, p=probs)
+
+    # Expand into a flat assignment: each element is the client_id for one row
+    asignaciones = []
+    for cid, nper in enumerate(periodos_por_cliente, start=1):
+        asignaciones.extend([cid] * int(nper))
+
+    # Trim or pad to exactly n rows
+    if len(asignaciones) > n:
+        asignaciones = asignaciones[:n]
+    elif len(asignaciones) < n:
+        # Add single-period clients to fill
+        next_cid = n_clientes + 1
+        while len(asignaciones) < n:
+            asignaciones.append(next_cid)
+            next_cid += 1
+
+    rng.shuffle(asignaciones)
+
+    df["id_cliente"] = asignaciones
+
+    # Sort within each client by fecha_inicio to assign renewal number
+    df.sort_values(["id_cliente", "fecha_inicio_vigencia"], inplace=True)
+    df["numero_renovacion"] = df.groupby("id_cliente").cumcount()
+
+    # Within each client chain, make later periods share key attributes
+    # with the first period (the "original" policy).
+    # We propagate: tipo_vehiculo, marca, modelo, anio_vehiculo,
+    # provincia, localidad, zona_riesgo, genero, estado_civil, ocupacion.
+    _propagate_cols = [
+        "tipo_vehiculo", "marca_vehiculo", "modelo_vehiculo", "anio_vehiculo",
+        "provincia", "localidad", "zona_riesgo", "barrio",
+        "genero_asegurado", "ocupacion",
+        "codigo_productor", "codigo_organizador",
+    ]
+
+    first_rows = df.groupby("id_cliente").first()
+    for col in _propagate_cols:
+        first_map = first_rows[col]
+        df[col] = df["id_cliente"].map(first_map)
+
+    # Re-derive fields that depend on propagated columns
+    df["ramo"] = cfg.ramo_principal
+    df.loc[df["tipo_vehiculo"] == "Moto", "ramo"] = cfg.ramo_motovehiculos
+    df["categoria_cobertura"] = df["plan_cobertura"].map(_CATEGORIA_COBERTURA)
+
+    # Age progresses with each renewal (~1 year per period)
+    edad_base = df.groupby("id_cliente")["edad_asegurado"].transform("first")
+    df["edad_asegurado"] = np.clip(edad_base + df["numero_renovacion"], 18, 85).astype(int)
+
+    # Adjust prima on renewals (inflation + experience)
+    mask_renov = df["numero_renovacion"] > 0
+    n_renov = int(mask_renov.sum())
+    if n_renov > 0:
+        ajuste = rng.uniform(
+            cfg.ajuste_prima_renovacion_rango[0],
+            cfg.ajuste_prima_renovacion_rango[1],
+            size=n_renov,
+        )
+        # Compound: each additional renewal period applies the factor
+        nums = df.loc[mask_renov, "numero_renovacion"].values
+        ajuste_compuesto = ajuste ** nums
+        df.loc[mask_renov, "prima"] = np.round(
+            df.loc[mask_renov, "prima"].values * ajuste_compuesto, 2
+        )
+        df.loc[mask_renov, "premio"] = np.round(
+            df.loc[mask_renov, "prima"].values * rng.uniform(1.15, 1.25, size=n_renov), 2
+        )
+
+    # Chance of coverage change on renewal
+    if cfg.prob_cambio_cobertura_renovacion > 0:
+        cambio = mask_renov & (rng.random(len(df)) < cfg.prob_cambio_cobertura_renovacion)
+        n_cambio = int(cambio.sum())
+        if n_cambio > 0:
+            nuevas_cob = _sample_weighted(rng, cfg.pesos_cobertura, n_cambio)
+            df.loc[cambio, "plan_cobertura"] = nuevas_cob
+            df.loc[cambio, "categoria_cobertura"] = (
+                df.loc[cambio, "plan_cobertura"].map(_CATEGORIA_COBERTURA)
+            )
+
+    # Re-sort by id_poliza for consistency
+    df.sort_values("id_poliza", inplace=True)
+    df.reset_index(drop=True, inplace=True)

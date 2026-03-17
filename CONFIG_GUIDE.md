@@ -9,7 +9,7 @@ Referencia completa de cada parámetro de `Config`. Para cada uno se explica qu�
 ### `random_seed` (default: `42`)
 Semilla del generador de números aleatorios. Cambiarla produce un dataset completamente distinto pero estadísticamente equivalente. Útil para generar múltiples versiones independientes del dataset. No afecta las distribuciones, solo el resultado puntual de cada sorteo.
 
-### `cantidad_polizas` (default: `50_000`)
+### `cantidad_polizas` (default: `100_000`)
 Número total de pólizas a generar. El número de siniestros escala aproximadamente proporcional (con la frecuencia target de 15–20%). A mayor cantidad, más estables son las distribuciones marginales y los LR por segmento. Con menos de 5 000 pólizas, segmentos pequeños (Utilitario, Formosa) pueden quedar con muy pocas observaciones.
 
 ### `fecha_inicio` / `fecha_fin` (default: `2021-01-01` / `2024-12-31`)
@@ -82,7 +82,7 @@ Mix de planes de cobertura. Afecta la **prima media** (a través de `factor_cobe
 - Más "Responsabilidad Civil" → cartera más barata, todos los siniestros Casco quedan sin cobertura y no se computan como costo.
 
 ### `pesos_genero`, `pesos_estado_civil`, `pesos_ocupacion`
-Variables demográficas. Actualmente son atributos descriptivos; **no entran directamente en la lógica de frecuencia ni severidad**. Cambiarlos solo modifica las proporciones de esas columnas en el CSV. Si en el futuro se quiere que, por ejemplo, "Soltero" tenga mayor frecuencia, habría que agregar lógica en `_lambda_por_segmento()`.
+Variables demográficas. Interactúan con `factor_demografico_frecuencia` (ver sección 9): combinaciones de edad + estado civil + ocupación modifican el lambda de frecuencia. Cambiar sus pesos ajusta las proporciones en el CSV y, de forma indirecta, la frecuencia media de la cartera.
 
 ### `pesos_canal`
 Mix de canal de venta. Afecta:
@@ -216,7 +216,98 @@ Son los parámetros más técnicos y de mayor impacto. Cada tipo de daño tiene 
 
 ---
 
-## 9. Otros parámetros de sinestros (en `siniestros.py`, no en config)
+## 9. Estado del siniestro, reservas y gastos de liquidación
+
+### `prob_estado_siniestro` (default: `Cerrado: 0.68, Abierto: 0.25, Rechazado: 0.07`)
+Distribución del estado de cada siniestro. Controla la mezcla de:
+- **Cerrado**: liquidado y pagado. `monto_pagado` refleja el pago final.
+- **Abierto**: en gestión. Tiene reserva activa y pago parcial (anticipo) que puede ser cero.
+- **Rechazado**: sin pago. Tiene `motivo_rechazo` poblado y `monto_pagado = 0`.
+
+Cambiar hacia más "Rechazado" baja el loss ratio (menos pagos). Cambiar hacia más "Abierto" aumenta las reservas activas.
+
+### `factor_reserva_rango` (default: `(0.85, 1.30)`)
+Rango del multiplicador sobre `monto_reclamado` para calcular `monto_reservado`. Un rango alto (ej. `(1.10, 1.50)`) simula subreservas agresivas. Un rango bajo simula reservas conservadoras.
+
+### `factor_pago_cerrado_rango` (default: `(0.70, 1.05)`)
+Qué porcentaje del `monto_reclamado` se paga en siniestros cerrados. Valores por debajo de 1.0 simulan negociaciones donde se paga menos de lo reclamado.
+
+### `factor_pago_abierto_rango` (default: `(0.0, 0.40)`)
+Pago parcial (anticipo) en siniestros abiertos, como fracción del `monto_reclamado`. Con el default, entre 0% y 40% ya pagado al momento del corte.
+
+### `pesos_motivo_rechazo`
+Distribución de motivos para siniestros rechazados:
+- `Falta de cobertura` (0.28), `Mora en el pago` (0.22), `Exclusión contractual` (0.18), `Documentación incompleta` (0.17), `Fraude presunto` (0.15).
+
+Cambiar estos pesos no afecta la frecuencia de rechazos (eso lo controla `prob_estado_siniestro`), solo la distribución de motivos dentro de los rechazados.
+
+### `gasto_liquidacion_base` (default: `45_000`)
+Mínimo fijo de gastos de liquidación por siniestro (honorarios perito, costos administrativos). En ARS del período base.
+
+### `gasto_liquidacion_pct` (default: `0.05`)
+Porcentaje del `monto_reclamado` que se suma como componente variable del gasto de liquidación.
+
+### `gasto_liquidacion_mult_juicio` (default: `2.5`)
+Multiplicador sobre el gasto base+variable cuando el siniestro está en juicio (incluye honorarios de abogados y costas procesales).
+
+### `gasto_liquidacion_mult_mediacion` (default: `1.4`)
+Multiplicador cuando hay mediación pero sin llegar a juicio.
+
+---
+
+## 10. Factores demográficos sobre frecuencia
+
+### `factor_demografico_frecuencia`
+Multiplicadores aplicados al lambda de frecuencia según características del asegurado:
+
+| Clave | Condición | Multiplicador | Efecto |
+|---|---|---|---|
+| `soltero_joven` | Soltero + edad < 25 | 1.18 | Mayor riesgo en conductores jóvenes sin familia |
+| `jubilado` | Ocupación = Jubilado | 0.85 | Menor exposición, menos kilómetros recorridos |
+| `divorciado_joven` | Divorciado + edad < 35 | 1.08 | Leve incremento por perfil de vida |
+
+Estos factores se aplican de forma acumulativa con los demás (zona, tipo vehículo, cobertura). Para desactivar un factor, ponerlo en `1.0`.
+
+---
+
+## 11. Cancelaciones mid-term
+
+### `tasa_cancelacion_base` (default: `0.07`)
+Proporción de pólizas canceladas antes de fin de vigencia. Con el default, ~7% de las pólizas tienen `cancelada = True` con una `fecha_cancelacion` válida dentro del período.
+
+Las pólizas con `meses_en_mora >= mora_umbral_cancelacion` tienen el doble de probabilidad de cancelación.
+
+### `mora_umbral_cancelacion` (default: `3`)
+Cantidad de meses de mora a partir de los cuales se duplica la probabilidad de cancelación. Refleja la baja de pólizas por falta de pago sostenida.
+
+### `pesos_motivo_cancelacion`
+Distribución de motivos de cancelación:
+- `Mora prolongada` (0.35), `Venta del vehículo` (0.25), `Cambio de compañía` (0.25), `Voluntaria` (0.15).
+
+---
+
+## 12. Cadenas de renovación (cohortes de clientes)
+
+### `pesos_periodos_cliente` (default: `{1: 0.45, 2: 0.28, 3: 0.18, 4: 0.09}`)
+Distribución del número de períodos de póliza por cliente. Con el default:
+- 45% de los clientes tiene una sola póliza (sin renovar)
+- 28% renueva una vez (2 pólizas vinculadas)
+- 18% renueva dos veces (3 pólizas)
+- 9% renueva tres veces (4 pólizas)
+
+Los clientes de una misma cadena comparten `id_cliente` y tienen `numero_renovacion` incremental. La demografía del asegurado se propaga coherentemente dentro de la cadena.
+
+**Efecto sobre el tamaño del dataset**: sumar más períodos promedio por cliente produce más pólizas por cliente, manteniendo `cantidad_polizas` total constante. Para aumentar la retención aparente, subir el peso de las claves 3 y 4.
+
+### `ajuste_prima_renovacion_rango` (default: `(1.10, 1.35)`)
+Factor multiplicativo aplicado a la prima en cada renovación. Simula ajustes por inflación y experiencia siniestral. Con el default, la prima crece entre 10% y 35% en cada renovación.
+
+### `prob_cambio_cobertura_renovacion` (default: `0.12`)
+Probabilidad de que el cliente cambie de plan de cobertura al renovar. El 12% de las renovaciones tiene un plan distinto al período anterior. Cambiar a 0 produce cadenas con cobertura constante; subirlo a 0.30+ produce más variabilidad en la historia del cliente.
+
+---
+
+## 13. Otros parámetros de siniestros (en `siniestros.py`, no en config)
 
 Estos valores no son configurables por `Config` pero vale documentarlos para referencia:
 
@@ -234,7 +325,7 @@ Estos valores no son configurables por `Config` pero vale documentarlos para ref
 
 ---
 
-## 10. Reglas de consistencia importantes
+## 14. Reglas de consistencia importantes
 
 Al modificar los parámetros, respetar estas dependencias:
 

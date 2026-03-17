@@ -121,28 +121,12 @@ def generar_catalogo_vehiculos() -> pd.DataFrame:
 
 def pesos_marca() -> dict[str, float]:
     return {
-        "Volkswagen": 0.12,
-        "Fiat": 0.09,
-        "Toyota": 0.10,
-        "Chevrolet": 0.08,
-        "Ford": 0.07,
-        "Renault": 0.07,
-        "Peugeot": 0.04,
-        "Citroën": 0.03,
-        "Honda": 0.07,
-        "Nissan": 0.04,
-        "Jeep": 0.03,
-        "Kia": 0.05,
-        "Hyundai": 0.05,
-        "Chery": 0.03,
-        "BYD": 0.02,
-        "Suzuki": 0.02,
-        "Yamaha": 0.04,
-        "Kawasaki": 0.02,
-        "Zanella": 0.03,
-        "Motomel": 0.03,
-        "Bajaj": 0.03,
-        "Beta": 0.02,
+        "Volkswagen": 0.12, "Fiat": 0.09, "Toyota": 0.10, "Chevrolet": 0.08,
+        "Ford": 0.07, "Renault": 0.07, "Peugeot": 0.04, "Citroën": 0.03,
+        "Honda": 0.07, "Nissan": 0.04, "Jeep": 0.03, "Kia": 0.05,
+        "Hyundai": 0.05, "Chery": 0.03, "BYD": 0.02, "Suzuki": 0.02,
+        "Yamaha": 0.04, "Kawasaki": 0.02, "Zanella": 0.03, "Motomel": 0.03,
+        "Bajaj": 0.03, "Beta": 0.02,
     }
 
 

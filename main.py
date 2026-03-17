@@ -36,6 +36,10 @@ def ejecutar_pipeline(cfg: Config, output_dir: Path) -> None:
         rng_renov = __import__("numpy").random.default_rng(cfg.random_seed + it * 100 + 2)
         df_polizas["renovada"] = ajustar_renovada_por_siniestros(df_polizas, df_siniestros, rng_renov)
 
+        # Re-apply: cancelled policies must stay not renewed
+        if "cancelada" in df_polizas.columns:
+            df_polizas.loc[df_polizas["cancelada"] == True, "renovada"] = False
+
         metricas = calcular_metricas(df_polizas, df_siniestros, cfg)
         freq = metricas["frecuencia_siniestral"]
         loss = metricas["loss_ratio"]
@@ -94,8 +98,8 @@ def ejecutar_pipeline(cfg: Config, output_dir: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generador sintético de cartera automotor")
-    parser.add_argument("--n-polizas", type=int, default=50000, help="Cantidad de pólizas a generar")
-    parser.add_argument("--seed", type=int, default=42, help="Seed reproducible")
+    parser.add_argument("--n-polizas", type=int, default=None, help="Cantidad de pólizas (default: usa config.py)")
+    parser.add_argument("--seed", type=int, default=None, help="Seed reproducible (default: usa config.py)")
     parser.add_argument("--output-dir", type=str, default="output", help="Directorio de salida CSV")
     return parser.parse_args()
 
