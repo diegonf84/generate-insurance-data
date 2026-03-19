@@ -6,7 +6,7 @@ A Python tool that generates realistic synthetic datasets for **Argentine automo
 
 ## What it generates
 
-### `polizas_sinteticas.csv` — Policy table (34 columns)
+### `polizas_sinteticas.csv` — Policy table (35 columns)
 Each row is one insurance policy. Key fields include:
 
 | Column | Description |
@@ -19,8 +19,9 @@ Each row is one insurance policy. Key fields include:
 | `marca_vehiculo`, `modelo_vehiculo`, `anio_vehiculo` | Vehicle details (68 models in catalog) |
 | `suma_asegurada`, `prima`, `premio` | Financial values in ARS |
 | `provincia`, `localidad`, `barrio` | 20 Argentine provinces, 200+ localities |
-| `zona_riesgo` | Alta / Media / Baja (derived from geography) |
+| `zona_riesgo` | Muy Alta / Alta / Media-Alta / Media / Baja (derived from geography) |
 | `edad_asegurado` | Bimodal distribution: peaks at ~27 and ~46 |
+| `medio_pago` | Efectivo / Tarjeta de crédito / Otros |
 | `canal_venta` | Productor / Broker / Organizador / Directa / Online |
 | `codigo_productor`, `codigo_organizador` | 1 000 producers, 50 organization groups |
 | `es_flota` | True for ~2% of policies (fleet vehicles) |

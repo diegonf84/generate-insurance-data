@@ -90,13 +90,17 @@ Mix de canal de venta. Afecta:
 - La **mora**: canales Online y Directa tienen una corrección negativa en la probabilidad de mora alta.
 - **No afecta** frecuencia ni severidad de siniestros directamente.
 
+### `pesos_medio_pago`
+Distribución del medio de pago: Efectivo / Tarjeta de crédito / Otros. Este campo interactúa con `prob_mora_por_medio_pago`: los pagos con tarjeta de crédito se auto-cobran y nunca generan mora, mientras que los pagos en efectivo tienen alta probabilidad de activar la lógica de mora.
+
 ### `pesos_uso`
 Proporción de uso Particular / Comercial / Profesional. Uso Comercial y Profesional aplican un multiplicador ×1.15 sobre lambda en `_lambda_por_segmento()`, por lo que aumentar su peso sube la frecuencia media de la cartera. El flag `es_flota` fuerza uso Comercial en ~2% de las pólizas independientemente de este peso.
 
 ### `pesos_provincia`
-Distribución geográfica. Dado que la zona de riesgo (Alta/Media/Baja) se deriva de provincia + localidad, cambiar estos pesos modifica indirectamente la mezcla de zonas:
-- Más peso en CABA → más pólizas zona Alta → mayor frecuencia y severidad promedio.
-- Más peso en provincias del interior → más pólizas zona Baja/Media.
+Distribución geográfica. Dado que la zona de riesgo (Muy Alta/Alta/Media-Alta/Media/Baja) se deriva de provincia + localidad, cambiar estos pesos modifica indirectamente la mezcla de zonas:
+- Más peso en CABA → más pólizas zona Muy Alta → mayor frecuencia y severidad promedio.
+- Más peso en Buenos Aires → más pólizas zona Alta (GBA) y Media (interior).
+- Más peso en provincias del interior → más pólizas zona Media-Alta (capitales) y Baja (resto).
 - **Restricción**: las claves deben coincidir exactamente con las entradas de `localidades_por_provincia`.
 
 ---
@@ -104,9 +108,14 @@ Distribución geográfica. Dado que la zona de riesgo (Alta/Media/Baja) se deriv
 ## 5. Geografía
 
 ### `localidades_por_provincia`
-Lista de localidades para cada provincia. Se samplea de forma uniforme dentro de cada provincia. Las localidades del GBA que están en `_GBA_LOCALIDADES` (en `polizas.py`) reciben zona Alta; las demás de Buenos Aires quedan como zona Media.
-- Agregar localidades GBA → más pólizas zona Alta en Buenos Aires.
-- Agregar localidades del interior de Buenos Aires → más zona Media.
+Lista de localidades para cada provincia. Se samplea de forma uniforme dentro de cada provincia. La zona de riesgo se asigna en 5 niveles:
+- CABA → Muy Alta
+- GBA (25 municipios en `_GBA_LOCALIDADES`), Córdoba Capital, Rosario → Alta
+- Grandes ciudades y capitales provinciales (en `_CIUDADES_MEDIA_ALTA`) → Media-Alta
+- Restantes localidades de Buenos Aires, Santa Fe, Mendoza, Córdoba → Media
+- Todo lo demás → Baja
+
+Agregar localidades GBA → más pólizas zona Alta. Agregar localidades a `_CIUDADES_MEDIA_ALTA` (en `polizas.py`) → más zona Media-Alta.
 
 ### `barrios_caba` / `barrios_gba`
 Listas de barrios para pólizas de CABA y GBA respectivamente. Son puramente descriptivos: no afectan frecuencia, severidad ni zona de riesgo. Solo enriquecen la columna `barrio` del CSV.
@@ -120,16 +129,17 @@ Rango uniforme del multiplicador de zona aplicado a la **prima** (no al siniestr
 ```
 prima ∝ suma_asegurada × tasa_base × factor_zona × ...
 ```
-- Subir los rangos de zona Alta → primas más altas en CABA/GBA → mejora el LR de esos segmentos.
-- Si se sube solo el factor de zona sin tocar `factor_severidad_por_zona`, el LR de zona Alta mejora.
+Tiene 5 claves: Muy Alta, Alta, Media-Alta, Media, Baja. Subir los rangos de zona Muy Alta/Alta → primas más altas en CABA/GBA → mejora el LR de esos segmentos.
 
 ### `factor_severidad_por_zona`
-Multiplicador aplicado al **monto del siniestro** (no a la prima):
-- Alta: 1.15 → los siniestros en zona Alta cuestan un 15% más.
-- Media: 1.00 → sin ajuste.
-- Baja: 0.85 → los siniestros en zona Baja cuestan un 15% menos.
+Multiplicador aplicado al **monto del siniestro** (no a la prima). Tiene 5 claves:
+- Muy Alta: 1.25 → los siniestros en CABA cuestan un 25% más.
+- Alta: 1.12 → GBA / Córdoba Capital / Rosario.
+- Media-Alta: 1.05 → grandes capitales provinciales.
+- Media: 0.95 → resto de Bs As / Santa Fe / Mendoza / Córdoba.
+- Baja: 0.82 → provincias menores / zonas rurales.
 
-Este parámetro controla la **variabilidad del loss ratio entre zonas**. Aumentar el spread (ej. Alta: 1.30, Baja: 0.70) produce diferencias más marcadas. Si se pone todos en 1.0, los LR por zona convergen.
+Este parámetro controla la **variabilidad del loss ratio entre zonas**. Aumentar el spread produce diferencias más marcadas. Si se pone todos en 1.0, los LR por zona convergen.
 
 ### `tasa_base_rango` (default: `(0.04, 0.06)`)
 Rango uniforme de la tasa técnica sobre la suma asegurada. Sube o baja la prima media de toda la cartera proporcionalmente. Subir el rango → más prima → mejor LR global (el loop de calibración puede ajustar menos agresivamente `severidad_scale`).
@@ -277,6 +287,14 @@ Proporción de pólizas canceladas antes de fin de vigencia. Con el default, ~7%
 
 Las pólizas con `meses_en_mora >= mora_umbral_cancelacion` tienen el doble de probabilidad de cancelación.
 
+### `prob_mora_por_medio_pago`
+Probabilidad de que la lógica de mora se active según el medio de pago:
+- `Efectivo: 0.70` — alta probabilidad de generar mora.
+- `Tarjeta de crédito: 0.0` — se auto-cobra, nunca genera mora.
+- `Otros: 0.15` — baja pero posible.
+
+Si el sorteo falla (el random supera la probabilidad), `meses_en_mora = 0` directamente. Esto crea una dependencia causal realista entre medio de pago y morosidad.
+
 ### `mora_umbral_cancelacion` (default: `3`)
 Cantidad de meses de mora a partir de los cuales se duplica la probabilidad de cancelación. Refleja la baja de pólizas por falta de pago sostenida.
 
@@ -333,7 +351,9 @@ Al modificar los parámetros, respetar estas dependencias:
 
 2. **Tipos de daño**: Los 7 tipos (`Robo total`, `Robo parcial`, `Choque`, `Incendio`, `Granizo`, `Daño a terceros`, `Otros`) deben existir como claves en `prob_tipo_danio_por_zona`, `severidad_lognormal`, `prob_tipo_danio_moto` y `severidad_lognormal_moto`. También están hardcodeados en `_PESOS_MES_DANIO` en `siniestros.py`.
 
-3. **GBA localities**: Las localidades de Buenos Aires que deben disparar zona Alta están en `_GBA_LOCALIDADES` (frozenset en `polizas.py`). Si se agregan localidades GBA a `localidades_por_provincia["Buenos Aires"]`, agregarlas también a ese frozenset.
+3. **GBA localities**: Las localidades de Buenos Aires que deben disparar zona Alta están en `_GBA_LOCALIDADES` (frozenset en `polizas.py`). Las ciudades que deben disparar zona Media-Alta están en `_CIUDADES_MEDIA_ALTA`. Si se agregan localidades, actualizar el frozenset correspondiente.
+
+5. **Zone dict key alignment**: todos los dicts con claves de zona (`factor_zona`, `factor_severidad_por_zona`, `prob_tipo_danio_por_zona`) deben tener las mismas 5 claves: `Muy Alta`, `Alta`, `Media-Alta`, `Media`, `Baja`.
 
 4. **`inflacion_anual`**: debe tener una entrada para cada año entre `fecha_inicio.year` y `fecha_fin.year`. Si se extiende `fecha_fin` a 2025, agregar `2025: <factor>`.
 

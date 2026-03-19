@@ -28,6 +28,10 @@ def validar_integridad(df_polizas: pd.DataFrame, df_siniestros: pd.DataFrame) ->
         resultados["primas_y_suma_positivas"] = bool(
             (df_polizas["prima"] > 0).all() and (df_polizas["suma_asegurada"] > 0).all()
         )
+        zonas_validas = {"Muy Alta", "Alta", "Media-Alta", "Media", "Baja"}
+        resultados["zona_riesgo_valida"] = bool(
+            df_polizas["zona_riesgo"].isin(zonas_validas).all()
+        )
         if "cancelada" in df_polizas.columns:
             resultados["cancelacion_coherente"] = True
         if "id_cliente" in df_polizas.columns:
@@ -121,6 +125,12 @@ def validar_integridad(df_polizas: pd.DataFrame, df_siniestros: pd.DataFrame) ->
     else:
         resultados["cancelacion_coherente"] = True
 
+    # ── Zone value validation ────────────────────────────────────────────────
+    zonas_validas = {"Muy Alta", "Alta", "Media-Alta", "Media", "Baja"}
+    resultados["zona_riesgo_valida"] = bool(
+        df_polizas["zona_riesgo"].isin(zonas_validas).all()
+    )
+
     # ── NEW: Renewal chain coherence ────────────────────────────────────────
     if "id_cliente" in df_polizas.columns and "numero_renovacion" in df_polizas.columns:
         # Within each client, numero_renovacion should start at 0
@@ -212,6 +222,13 @@ def calcular_metricas(df_polizas: pd.DataFrame, df_siniestros: pd.DataFrame, cfg
     if "cancelada" in df_polizas.columns:
         metricas["tasa_cancelacion"] = float(df_polizas["cancelada"].mean())
 
+    # Zone distribution
+    metricas["distribucion_zona"] = df_polizas["zona_riesgo"].value_counts(normalize=True).to_dict()
+
+    # Payment method distribution
+    if "medio_pago" in df_polizas.columns:
+        metricas["distribucion_medio_pago"] = df_polizas["medio_pago"].value_counts(normalize=True).to_dict()
+
     # Cohort stats
     if "id_cliente" in df_polizas.columns:
         metricas["n_clientes_unicos"] = int(df_polizas["id_cliente"].nunique())
@@ -275,6 +292,16 @@ def imprimir_reporte(validaciones: dict[str, bool], metricas: dict[str, Any], cf
     else:
         for tipo, sev in metricas["severidad_promedio_tipo"].items():
             print(f"- {tipo}: ARS {sev:,.2f}")
+
+    if "distribucion_zona" in metricas:
+        print("\n[Distribución por zona de riesgo]")
+        for zona, pct in metricas["distribucion_zona"].items():
+            print(f"- {zona}: {pct*100:.1f}%")
+
+    if "distribucion_medio_pago" in metricas:
+        print("\n[Distribución por medio de pago]")
+        for mp, pct in metricas["distribucion_medio_pago"].items():
+            print(f"- {mp}: {pct*100:.1f}%")
 
     # ── NEW: Renewal chain distribution ─────────────────────────────────────
     if "distribucion_renovaciones" in metricas:

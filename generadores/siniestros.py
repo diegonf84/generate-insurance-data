@@ -31,21 +31,29 @@ def _sample_weighted(rng: np.random.Generator, pesos: dict[str, float]) -> str:
     return str(rng.choice(vals, p=probs))
 
 
+_LAMBDA_BASE_ZONA: dict[str, float] = {
+    "Muy Alta": 0.22,
+    "Alta": 0.18,
+    "Media-Alta": 0.15,
+    "Media": 0.12,
+    "Baja": 0.08,
+}
+
+
 def _lambda_por_segmento(row: pd.Series, cfg: Config) -> float:
     zona = row["zona_riesgo"]
     edad = int(row["edad_asegurado"])
     uso = row["tipo_uso"]
 
-    if zona == "Alta" and edad < 25 and uso in {"Comercial", "Profesional"}:
-        lam = 0.35
-    elif zona == "Alta" and 25 <= edad <= 55 and uso == "Particular":
-        lam = 0.20
-    elif zona == "Media" and 25 <= edad <= 55 and uso == "Particular":
-        lam = 0.15
-    elif zona == "Baja" and 35 <= edad <= 55 and uso == "Particular":
-        lam = 0.08
-    else:
-        lam = 0.12
+    lam = _LAMBDA_BASE_ZONA.get(zona, 0.12)
+
+    # Age + usage modifier
+    if edad < 25 and uso in {"Comercial", "Profesional"}:
+        lam *= 1.60
+    elif edad < 25:
+        lam *= 1.30
+    elif edad > 55:
+        lam *= 1.05
 
     if uso in {"Comercial", "Profesional"}:
         lam *= 1.15
@@ -58,7 +66,7 @@ def _lambda_por_segmento(row: pd.Series, cfg: Config) -> float:
     elif tipo_vehiculo == "Camioneta":
         lam *= 0.85
 
-    # ── NEW: Demographic frequency factors ──────────────────────────────────
+    # Demographic frequency factors
     estado_civil = row.get("estado_civil", "")
     ocupacion = row.get("ocupacion", "")
     factores = cfg.factor_demografico_frecuencia

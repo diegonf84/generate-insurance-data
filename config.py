@@ -72,6 +72,14 @@ class Config:
             "Online": 0.05,
         }
     )
+    pesos_medio_pago: dict[str, float] = field(
+        default_factory=lambda: {
+            "Efectivo": 0.30,
+            "Tarjeta de crédito": 0.40,
+            "Otros": 0.30,
+        }
+    )
+
     pesos_uso: dict[str, float] = field(
         default_factory=lambda: {"Particular": 0.80, "Comercial": 0.15, "Profesional": 0.05}
     )
@@ -288,17 +296,21 @@ class Config:
 
     factor_zona: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
-            "Alta": (1.30, 1.50),
-            "Media": (1.00, 1.20),
+            "Muy Alta": (1.40, 1.60),
+            "Alta": (1.25, 1.45),
+            "Media-Alta": (1.10, 1.25),
+            "Media": (0.95, 1.10),
             "Baja": (0.70, 0.90),
         }
     )
 
     factor_severidad_por_zona: dict[str, float] = field(
         default_factory=lambda: {
-            "Alta": 1.15,
-            "Media": 1.00,
-            "Baja": 0.85,
+            "Muy Alta": 1.25,
+            "Alta": 1.12,
+            "Media-Alta": 1.05,
+            "Media": 0.95,
+            "Baja": 0.82,
         }
     )
 
@@ -351,9 +363,17 @@ class Config:
 
     prob_tipo_danio_por_zona: dict[str, dict[str, float]] = field(
         default_factory=lambda: {
+            "Muy Alta": {
+                "Robo total": 0.18, "Robo parcial": 0.12, "Choque": 0.30,
+                "Incendio": 0.03, "Granizo": 0.05, "Daño a terceros": 0.25, "Otros": 0.07,
+            },
             "Alta": {
                 "Robo total": 0.15, "Robo parcial": 0.10, "Choque": 0.35,
                 "Incendio": 0.03, "Granizo": 0.05, "Daño a terceros": 0.25, "Otros": 0.07,
+            },
+            "Media-Alta": {
+                "Robo total": 0.10, "Robo parcial": 0.07, "Choque": 0.38,
+                "Incendio": 0.03, "Granizo": 0.07, "Daño a terceros": 0.27, "Otros": 0.08,
             },
             "Media": {
                 "Robo total": 0.08, "Robo parcial": 0.05, "Choque": 0.40,
@@ -438,6 +458,16 @@ class Config:
             "Voluntaria": 0.15,
         }
     )
+    # Probabilidad de que la lógica de mora se active según medio de pago.
+    # Tarjeta de crédito se auto-cobra → nunca genera mora.
+    prob_mora_por_medio_pago: dict[str, float] = field(
+        default_factory=lambda: {
+            "Efectivo": 0.70,
+            "Tarjeta de crédito": 0.0,
+            "Otros": 0.15,
+        }
+    )
+
     # Pólizas con mora >= este umbral tienen mayor probabilidad de cancelación.
     mora_umbral_cancelacion: int = 3
 

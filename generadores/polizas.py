@@ -21,6 +21,22 @@ _GBA_LOCALIDADES: frozenset[str] = frozenset({
     "San Miguel", "Moreno", "Pilar", "Escobar", "Vicente López",
 })
 
+_CIUDADES_MEDIA_ALTA: frozenset[str] = frozenset({
+    # Buenos Aires interior — large cities
+    "La Plata", "Mar del Plata", "Bahía Blanca",
+    # Mendoza metro
+    "Mendoza Capital", "Godoy Cruz", "Guaymallén", "Las Heras", "Maipú",
+    # Santa Fe Capital
+    "Santa Fe Capital",
+    # Córdoba secondary
+    "Villa Carlos Paz", "Río Cuarto", "Villa María",
+    # Provincial capitals and large cities
+    "San Miguel de Tucumán", "Paraná", "Neuquén Capital", "Salta Capital",
+    "Resistencia", "Posadas", "Corrientes Capital", "San Juan Capital",
+    "San Salvador de Jujuy", "Santiago del Estero Capital", "San Luis Capital",
+    "Formosa Capital", "Catamarca Capital", "Bariloche",
+})
+
 _CATEGORIA_COBERTURA: dict[str, str] = {
     "Responsabilidad Civil": "Solo RC",
     "Terceros Completo": "RC + Casco Básico",
@@ -77,13 +93,15 @@ def _sample_fechas_inicio(cfg: Config, rng: np.random.Generator, n: int) -> pd.S
 
 def _asignar_zona(provincia: str, localidad: str) -> str:
     if provincia == "CABA":
-        return "Alta"
+        return "Muy Alta"
     if provincia == "Buenos Aires" and localidad in _GBA_LOCALIDADES:
         return "Alta"
     if provincia == "Córdoba" and localidad == "Córdoba Capital":
         return "Alta"
     if provincia == "Santa Fe" and localidad == "Rosario":
         return "Alta"
+    if localidad in _CIUDADES_MEDIA_ALTA:
+        return "Media-Alta"
     if provincia in {"Buenos Aires", "Santa Fe", "Mendoza", "Córdoba"}:
         return "Media"
     return "Baja"
@@ -112,10 +130,20 @@ def _factor_antiguedad_vehiculo(anio: int) -> float:
     return 1.25
 
 
-def _sample_mora(rng: np.random.Generator, zona: str, canal: str) -> int:
+def _sample_mora(
+    rng: np.random.Generator, zona: str, canal: str,
+    medio_pago: str, cfg: Config,
+) -> int:
+    # Check if mora logic even runs based on payment method
+    prob_activa = cfg.prob_mora_por_medio_pago.get(medio_pago, 0.15)
+    if rng.random() >= prob_activa:
+        return 0
+
     probs = np.array([0.70, 0.15, 0.08, 0.05, 0.02], dtype=float)
-    if zona == "Alta":
+    if zona in {"Muy Alta", "Alta"}:
         probs += np.array([-0.05, 0.02, 0.01, 0.01, 0.01])
+    elif zona == "Media-Alta":
+        probs += np.array([-0.03, 0.01, 0.01, 0.005, 0.005])
     if canal in {"Online", "Directa"}:
         probs += np.array([-0.03, 0.01, 0.01, 0.005, 0.005])
     probs = np.clip(probs, 0.001, None)
@@ -239,6 +267,7 @@ def generar_polizas(cfg: Config, seed: int | None = None) -> pd.DataFrame:
     df["estado_civil"] = _sample_weighted(rng, cfg.pesos_estado_civil, n)
     df["ocupacion"] = _sample_weighted(rng, cfg.pesos_ocupacion, n)
     df["canal_venta"] = _sample_weighted(rng, cfg.pesos_canal, n)
+    df["medio_pago"] = _sample_weighted(rng, cfg.pesos_medio_pago, n)
 
     # Producers with power-law distribution
     productores = np.array([f"PROD-{i:04d}" for i in range(1, cfg.n_productores + 1)])
@@ -335,8 +364,10 @@ def generar_polizas(cfg: Config, seed: int | None = None) -> pd.DataFrame:
     df["premio"] = np.round(df["prima"].values * (1 + recargo), 2)
 
     df["meses_en_mora"] = [
-        _sample_mora(rng, zona, canal)
-        for zona, canal in zip(df["zona_riesgo"].values, df["canal_venta"].values)
+        _sample_mora(rng, zona, canal, medio_pago, cfg)
+        for zona, canal, medio_pago in zip(
+            df["zona_riesgo"].values, df["canal_venta"].values, df["medio_pago"].values,
+        )
     ]
 
     prob_base_renov = 0.75 - np.where(df["meses_en_mora"].values >= 2, 0.08, 0.0)
@@ -417,6 +448,7 @@ def _asignar_cadenas_renovacion(
         "provincia", "localidad", "zona_riesgo", "barrio",
         "genero_asegurado", "ocupacion",
         "codigo_productor", "codigo_organizador",
+        "medio_pago",
     ]
 
     first_rows = df.groupby("id_cliente").first()

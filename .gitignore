@@ -18,5 +18,8 @@ prompt_data_sintetica.md
 # Exported notebooks
 *.html
 
+# Analysis notes (personal)
+analisis_recomendaciones.md
+
 # macOS metadata
 .DS_Store
