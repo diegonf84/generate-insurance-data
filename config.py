@@ -74,9 +74,26 @@ class Config:
     )
     pesos_medio_pago: dict[str, float] = field(
         default_factory=lambda: {
-            "Efectivo": 0.30,
-            "Tarjeta de crédito": 0.40,
-            "Otros": 0.30,
+            "Tarjeta de crédito":   0.30,
+            "Tarjeta de débito":    0.10,
+            "Débito automático CBU": 0.20,
+            "Billetera virtual":    0.10,
+            "Transferencia":        0.10,
+            "Efectivo":             0.20,
+        }
+    )
+
+    # Distribución de cuotas por medio de pago. Solo los medios con
+    # financiación (tarjeta crédito, CBU) admiten cuotas > 1. Para efectivo,
+    # transferencia, tarjeta débito y billetera virtual: siempre 1 cuota.
+    pesos_cuotas_por_medio_pago: dict[str, dict[int, float]] = field(
+        default_factory=lambda: {
+            "Tarjeta de crédito": {1: 0.20, 3: 0.30, 6: 0.25, 12: 0.25},
+            "Débito automático CBU": {1: 0.30, 3: 0.25, 6: 0.25, 12: 0.20},
+            "Tarjeta de débito":  {1: 1.00},
+            "Billetera virtual":  {1: 0.70, 3: 0.20, 6: 0.10},
+            "Transferencia":      {1: 1.00},
+            "Efectivo":           {1: 1.00},
         }
     )
 
@@ -337,6 +354,27 @@ class Config:
         }
     )
 
+    # ── Franquicia (deductible) ──────────────────────────────────────────────
+    # Solo aplica a planes con cobertura de Casco (Terceros Completo y Todo
+    # Riesgo). Responsabilidad Civil siempre tiene franquicia = 0 (cubre al
+    # tercero, no al asegurado).
+    # Valor expresado como fracción de la suma asegurada (0.05 = 5%).
+    pesos_franquicia: dict[float, float] = field(
+        default_factory=lambda: {
+            0.00: 0.40,  # sin franquicia (premium)
+            0.05: 0.50,  # estándar
+            0.20: 0.10,  # franquicia alta (más barato)
+        }
+    )
+    # Descuento sobre la prima por nivel de franquicia.
+    factor_franquicia: dict[float, float] = field(
+        default_factory=lambda: {
+            0.00: 1.00,
+            0.05: 0.93,
+            0.20: 0.82,
+        }
+    )
+
     comision_por_canal: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
             "Productor": (0.10, 0.28),
@@ -477,6 +515,22 @@ class Config:
         }
     )
 
+    # ── Antigüedad de carnet (años desde licencia de conducir) ───────────────
+    # Edad legal de conducir en Argentina: 17 años → antiguedad máx = edad - 17.
+    # Forma: beta(alpha, beta) sobre el máximo posible, sesgada hacia el límite
+    # superior (la mayoría tiene muchos años de carnet relativos a su edad).
+    edad_carnet_minimo: int = 17
+    antiguedad_carnet_beta: tuple[float, float] = (5.0, 2.0)
+    # Factores de frecuencia por banda de antigüedad de carnet.
+    factor_antiguedad_carnet: dict[str, float] = field(
+        default_factory=lambda: {
+            "novel":       1.25,  # < 2 años
+            "intermedio":  1.10,  # 2-4 años
+            "establecido": 1.00,  # 5-9 años (base)
+            "experimentado": 0.95,  # >= 10 años
+        }
+    )
+
     # ── NEW: Cancelaciones mid-term ─────────────────────────────────────────
     # Tasa base de cancelación antes de fin de vigencia.
     tasa_cancelacion_base: float = 0.07
@@ -490,12 +544,17 @@ class Config:
         }
     )
     # Probabilidad de que la lógica de mora se active según medio de pago.
-    # Tarjeta de crédito se auto-cobra → nunca genera mora.
+    # Tarjeta de crédito se auto-cobra → casi nunca genera mora.
+    # Débito CBU puede rechazar por falta de fondos. Efectivo y transferencia
+    # dependen del cliente activo cada mes.
     prob_mora_por_medio_pago: dict[str, float] = field(
         default_factory=lambda: {
-            "Efectivo": 0.70,
-            "Tarjeta de crédito": 0.0,
-            "Otros": 0.15,
+            "Tarjeta de crédito":   0.00,
+            "Tarjeta de débito":    0.05,
+            "Débito automático CBU": 0.10,
+            "Billetera virtual":    0.15,
+            "Transferencia":        0.30,
+            "Efectivo":             0.70,
         }
     )
 
@@ -519,6 +578,93 @@ class Config:
     ajuste_prima_renovacion_rango: tuple[float, float] = (1.10, 1.35)
     # Probabilidad de cambiar de cobertura en una renovación.
     prob_cambio_cobertura_renovacion: float = 0.12
+
+    # ── Tipo de combustible ───────────────────────────────────────────────────
+    # Distribución por tipo de vehículo. Motos: solo Nafta. Camionetas y
+    # utilitarios: más Diésel. Autos: mezcla típica.
+    pesos_combustible_por_tipo: dict[str, dict[str, float]] = field(
+        default_factory=lambda: {
+            "Auto": {
+                "Nafta":     0.74,
+                "Diésel":    0.10,
+                "GNC":       0.13,
+                "Híbrido":   0.02,
+                "Eléctrico": 0.01,
+            },
+            "Camioneta": {
+                "Nafta":     0.30,
+                "Diésel":    0.65,
+                "GNC":       0.04,
+                "Híbrido":   0.005,
+                "Eléctrico": 0.005,
+            },
+            "Utilitario": {
+                "Nafta":     0.25,
+                "Diésel":    0.70,
+                "GNC":       0.04,
+                "Híbrido":   0.005,
+                "Eléctrico": 0.005,
+            },
+            "Moto": {
+                "Nafta":     1.00,
+                "Diésel":    0.00,
+                "GNC":       0.00,
+                "Híbrido":   0.00,
+                "Eléctrico": 0.00,
+            },
+        }
+    )
+    # Recargo de prima por tipo de combustible.
+    factor_prima_combustible: dict[str, float] = field(
+        default_factory=lambda: {
+            "Nafta":     1.00,
+            "Diésel":    1.02,
+            "GNC":       1.05,
+            "Híbrido":   1.03,
+            "Eléctrico": 1.08,
+        }
+    )
+    # Multiplicador de probabilidad de Incendio cuando el vehículo usa GNC.
+    factor_incendio_gnc: float = 1.6
+    # Multiplicador de severidad para Choques en vehículos eléctricos
+    # (baterías costosas, daños estructurales mayores).
+    factor_severidad_choque_electrico: float = 1.30
+
+    # ── Rastreador (Lojack/Ituran) ────────────────────────────────────────────
+    # Probabilidad de que la póliza tenga rastreador, por zona de riesgo.
+    # Mayor en zonas de mayor riesgo de robo (es donde la inversión se justifica).
+    prob_rastreador_por_zona: dict[str, float] = field(
+        default_factory=lambda: {
+            "Muy Alta":   0.35,
+            "Alta":       0.28,
+            "Media-Alta": 0.18,
+            "Media":      0.10,
+            "Baja":       0.05,
+        }
+    )
+    # Descuento sobre prima por tener rastreador.
+    factor_prima_rastreador: float = 0.90
+    # Multiplicador aplicado a la probabilidad de Robo total y Robo parcial
+    # cuando la póliza tiene rastreador.
+    factor_robo_rastreador: float = 0.50
+
+    # ── Escala bonus-malus ────────────────────────────────────────────────────
+    # Nivel 0 = mejor (máx. descuento), nivel 5 = peor (máx. recargo).
+    # Clientes nuevos arrancan en nivel 3 (base). Cada renovación es un random
+    # walk: con probabilidad p_sin_claim baja un nivel (sin siniestros previos);
+    # caso contrario sube uno (claim en el período anterior).
+    bonus_malus_nivel_inicial: int = 3
+    bonus_malus_p_sin_claim: float = 0.78
+    factor_bonus_malus: dict[int, float] = field(
+        default_factory=lambda: {
+            0: 0.80,
+            1: 0.90,
+            2: 0.95,
+            3: 1.00,
+            4: 1.20,
+            5: 1.40,
+        }
+    )
 
 
 def construir_config(cantidad_polizas: int | None = None, seed: int | None = None) -> Config:

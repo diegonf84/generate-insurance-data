@@ -54,6 +54,26 @@ def calcular_prima_y_premio(df: pd.DataFrame, cfg: Config, rng: np.random.Genera
     )
 
     prima = df["suma_asegurada"].values * tasa_base * factor_cob * factor_z * factor_ed * factor_ant
+
+    if "franquicia" in df.columns:
+        factor_fr = np.array(
+            [cfg.factor_franquicia.get(float(f), 1.0) for f in df["franquicia"].values]
+        )
+        prima *= factor_fr
+
+    if "tiene_rastreador" in df.columns:
+        prima = np.where(
+            df["tiene_rastreador"].values,
+            prima * cfg.factor_prima_rastreador,
+            prima,
+        )
+
+    if "tipo_combustible" in df.columns:
+        factor_comb = np.array(
+            [cfg.factor_prima_combustible.get(str(c), 1.0) for c in df["tipo_combustible"].values]
+        )
+        prima *= factor_comb
+
     prima *= rng.uniform(0.88, 1.15, size=n)
     df["prima"] = np.round(prima, 2)
 

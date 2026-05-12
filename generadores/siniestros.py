@@ -69,6 +69,18 @@ def _lambda_por_segmento(row: pd.Series, cfg: Config) -> float:
     if estado_civil == "Divorciado" and edad < 35:
         lam *= factores.get("divorciado_joven", 1.0)
 
+    # Driving experience (años de carnet)
+    antig_carnet = int(row.get("antiguedad_carnet_anios", 0))
+    factores_carnet = cfg.factor_antiguedad_carnet
+    if antig_carnet < 2:
+        lam *= factores_carnet.get("novel", 1.0)
+    elif antig_carnet < 5:
+        lam *= factores_carnet.get("intermedio", 1.0)
+    elif antig_carnet >= 10:
+        lam *= factores_carnet.get("experimentado", 1.0)
+    else:
+        lam *= factores_carnet.get("establecido", 1.0)
+
     return lam
 
 
@@ -194,9 +206,15 @@ def _calcular_montos_financieros(
     cfg: Config,
     monto_reclamado: float,
     estado: str,
+    cobertura_casco: bool,
+    franquicia_pesos: float,
 ) -> tuple[float, float]:
-    """Return (monto_reservado, monto_pagado) based on claim status."""
-    # Reserva: initial estimate (can be over or under)
+    """Return (monto_reservado, monto_pagado) based on claim status.
+
+    Franquicia (deductible) is deducted from monto_pagado only when the claim
+    is paid under casco coverage. RC claims pay the third party directly, so
+    the deductible does not apply.
+    """
     reserva = monto_reclamado * rng.uniform(*cfg.factor_reserva_rango)
     reserva = round(max(0, reserva), 2)
 
@@ -204,10 +222,12 @@ def _calcular_montos_financieros(
         return reserva, 0.0
     elif estado == "Cerrado":
         pago = monto_reclamado * rng.uniform(*cfg.factor_pago_cerrado_rango)
-        return reserva, round(max(0, pago), 2)
     else:  # Abierto
         pago = monto_reclamado * rng.uniform(*cfg.factor_pago_abierto_rango)
-        return reserva, round(max(0, pago), 2)
+
+    if cobertura_casco and franquicia_pesos > 0:
+        pago = max(0.0, pago - franquicia_pesos)
+    return reserva, round(max(0, pago), 2)
 
 
 def _calcular_gasto_liquidacion(
@@ -309,14 +329,27 @@ def generar_siniestros(
 
         meses_mora = int(poliza.get("meses_en_mora", 0))
 
+        tiene_rastreador = bool(poliza.get("tiene_rastreador", False))
+        tipo_combustible = str(poliza.get("tipo_combustible", "Nafta"))
         for _ in range(n):
             tipo_veh = poliza.get("tipo_vehiculo", "Auto")
             if tipo_veh == "Moto":
-                tipo_danio = _sample_weighted(rng, cfg.prob_tipo_danio_moto)
-                mu, sigma = cfg.severidad_lognormal_moto[tipo_danio]
+                probs_base = cfg.prob_tipo_danio_moto
+                sev_dict = cfg.severidad_lognormal_moto
             else:
-                tipo_danio = _sample_weighted(rng, cfg.prob_tipo_danio_por_zona[poliza["zona_riesgo"]])
-                mu, sigma = cfg.severidad_lognormal[tipo_danio]
+                probs_base = cfg.prob_tipo_danio_por_zona[poliza["zona_riesgo"]]
+                sev_dict = cfg.severidad_lognormal
+
+            probs_efectivas = dict(probs_base)
+            if tiene_rastreador:
+                for k in ("Robo total", "Robo parcial"):
+                    if k in probs_efectivas:
+                        probs_efectivas[k] *= cfg.factor_robo_rastreador
+            if tipo_combustible == "GNC" and "Incendio" in probs_efectivas:
+                probs_efectivas["Incendio"] *= cfg.factor_incendio_gnc
+
+            tipo_danio = _sample_weighted(rng, probs_efectivas)
+            mu, sigma = sev_dict[tipo_danio]
 
             fecha_siniestro = _sample_fecha_siniestro(
                 rng,
@@ -336,6 +369,9 @@ def generar_siniestros(
             monto *= cfg.inflacion_anual.get(fecha_siniestro.year, 4.0)
             monto *= severidad_scale
             monto *= factor_zona_sev
+
+            if tipo_combustible == "Eléctrico" and tipo_danio == "Choque":
+                monto *= cfg.factor_severidad_choque_electrico
 
             # Extreme severity tail: ~1% catastrophic / fraud signal
             if rng.random() < 0.01:
@@ -391,8 +427,10 @@ def generar_siniestros(
             estado = _asignar_estado_siniestro(
                 rng, cfg, monto, en_juicio, meses_mora
             )
+            franquicia_pct = float(poliza.get("franquicia", 0.0) or 0.0)
+            franquicia_pesos = franquicia_pct * float(poliza.get("suma_asegurada", 0.0))
             monto_reservado, monto_pagado = _calcular_montos_financieros(
-                rng, cfg, monto, estado
+                rng, cfg, monto, estado, casco, franquicia_pesos
             )
             gasto_liquidacion = _calcular_gasto_liquidacion(
                 rng, cfg, monto, en_mediacion, en_juicio, estado

@@ -12,7 +12,12 @@ from generadores.cohortes import (
 )
 from generadores.geografia import asignar_geografia
 from generadores.mora_cancelacion import aplicar_cancelaciones, aplicar_mora
-from generadores.sampling import sample_edad, sample_fechas_inicio, sample_weighted
+from generadores.sampling import (
+    sample_antiguedad_carnet,
+    sample_edad,
+    sample_fechas_inicio,
+    sample_weighted,
+)
 from generadores.tarifa import CATEGORIA_COBERTURA, calcular_prima_y_premio
 from generadores.vehiculos import (
     estimar_valor_vehiculo,
@@ -39,11 +44,23 @@ def _asignar_vigencia(df: pd.DataFrame, cfg: Config, rng: np.random.Generator) -
 def _asignar_demograficos(df: pd.DataFrame, cfg: Config, rng: np.random.Generator) -> None:
     n = len(df)
     df["edad_asegurado"] = sample_edad(rng, n)
+    df["antiguedad_carnet_anios"] = sample_antiguedad_carnet(
+        rng,
+        df["edad_asegurado"].values,
+        cfg.edad_carnet_minimo,
+        cfg.antiguedad_carnet_beta,
+    )
     df["genero_asegurado"] = sample_weighted(rng, cfg.pesos_genero, n)
     df["estado_civil"] = sample_weighted(rng, cfg.pesos_estado_civil, n)
     df["ocupacion"] = sample_weighted(rng, cfg.pesos_ocupacion, n)
     df["canal_venta"] = sample_weighted(rng, cfg.pesos_canal, n)
     df["medio_pago"] = sample_weighted(rng, cfg.pesos_medio_pago, n)
+
+    cuotas = np.empty(n, dtype=int)
+    for medio, grp in df.groupby("medio_pago"):
+        pesos_c = cfg.pesos_cuotas_por_medio_pago.get(str(medio), {1: 1.0})
+        cuotas[grp.index] = sample_weighted(rng, pesos_c, len(grp)).astype(int)
+    df["cantidad_cuotas"] = cuotas
 
 
 def _asignar_productor_organizador(
@@ -139,6 +156,37 @@ def _asignar_uso(df: pd.DataFrame, cfg: Config, rng: np.random.Generator) -> Non
     df.loc[df["es_flota"], "tipo_uso"] = "Comercial"
 
 
+def _asignar_combustible(df: pd.DataFrame, cfg: Config, rng: np.random.Generator) -> None:
+    """Assign tipo_combustible per row based on tipo_vehiculo."""
+    combustibles = np.empty(len(df), dtype=object)
+    for tipo_veh, grp in df.groupby("tipo_vehiculo"):
+        pesos = cfg.pesos_combustible_por_tipo.get(
+            str(tipo_veh), cfg.pesos_combustible_por_tipo["Auto"]
+        )
+        combustibles[grp.index] = sample_weighted(rng, pesos, len(grp))
+    df["tipo_combustible"] = combustibles
+
+
+def _asignar_rastreador(df: pd.DataFrame, cfg: Config, rng: np.random.Generator) -> None:
+    """Assign tiene_rastreador per row based on zona_riesgo."""
+    n = len(df)
+    probs = np.array(
+        [cfg.prob_rastreador_por_zona.get(str(z), 0.10) for z in df["zona_riesgo"].values]
+    )
+    df["tiene_rastreador"] = rng.random(n) < probs
+
+
+def _asignar_franquicia(df: pd.DataFrame, cfg: Config, rng: np.random.Generator) -> None:
+    """Assign franquicia (deductible) — only for plans with Casco coverage."""
+    n = len(df)
+    tiene_casco = df["plan_cobertura"].isin(["Terceros Completo", "Todo Riesgo"]).values
+    franquicia = np.zeros(n, dtype=float)
+    n_casco = int(tiene_casco.sum())
+    if n_casco > 0:
+        franquicia[tiene_casco] = sample_weighted(rng, cfg.pesos_franquicia, n_casco).astype(float)
+    df["franquicia"] = franquicia
+
+
 def _aplicar_renovacion_base(df: pd.DataFrame, rng: np.random.Generator) -> None:
     n = len(df)
     prob_base_renov = 0.75 - np.where(df["meses_en_mora"].values >= 2, 0.08, 0.0)
@@ -164,12 +212,19 @@ def generar_polizas(cfg: Config, seed: int | None = None) -> pd.DataFrame:
     _asignar_uso(df, cfg, rng)
 
     df["categoria_cobertura"] = df["plan_cobertura"].map(CATEGORIA_COBERTURA)
+    _asignar_combustible(df, cfg, rng)
+    _asignar_franquicia(df, cfg, rng)
+    _asignar_rastreador(df, cfg, rng)
 
     calcular_prima_y_premio(df, cfg, rng)
     aplicar_mora(df, cfg, rng)
     _aplicar_renovacion_base(df, rng)
 
     asignar_cadenas_renovacion(df, cfg, rng)
+    # Recompute mora using the final medio_pago after cohort propagation
+    # (the first pass used the initial random medio_pago, which may have
+    # changed when cohortes propagated values from the first period).
+    aplicar_mora(df, cfg, rng)
     aplicar_cancelaciones(df, cfg, rng)
 
     return df

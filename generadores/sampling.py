@@ -30,6 +30,22 @@ def sample_edad(rng: np.random.Generator, n: int) -> np.ndarray:
     return np.round(combined).astype(int)
 
 
+def sample_antiguedad_carnet(
+    rng: np.random.Generator,
+    edades: np.ndarray,
+    edad_minima: int,
+    beta_params: tuple[float, float],
+) -> np.ndarray:
+    """Sample years of driving experience, bounded by (edad - edad_minima).
+
+    Uses Beta(alpha, beta) over the max possible years per individual,
+    skewed toward the upper bound (most drivers have many years).
+    """
+    max_anios = np.maximum(edades - edad_minima, 0).astype(float)
+    fraccion = rng.beta(beta_params[0], beta_params[1], size=len(edades))
+    return np.clip(np.round(max_anios * fraccion), 0, max_anios).astype(int)
+
+
 def sample_fechas_inicio(cfg: Config, rng: np.random.Generator, n: int) -> pd.Series:
     anios = np.arange(cfg.fecha_inicio.year, cfg.fecha_fin.year + 1)
     pesos_mensuales = np.array([0.07, 0.07, 0.12, 0.07, 0.07, 0.08, 0.08, 0.08, 0.07, 0.12, 0.09, 0.08])
