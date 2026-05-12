@@ -6,6 +6,7 @@ from pathlib import Path
 from config import Config, construir_config
 from generadores.polizas import ajustar_renovada_por_siniestros, generar_polizas
 from generadores.siniestros import generar_siniestros
+from diagnostico.runner import build_snapshot, escribir_artefactos
 from validaciones import calcular_metricas, imprimir_reporte, validar_integridad
 
 
@@ -80,6 +81,22 @@ def ejecutar_pipeline(cfg: Config, output_dir: Path) -> None:
 
     df_polizas.to_csv(path_polizas, index=False, encoding="utf-8")
     df_siniestros.to_csv(path_siniestros, index=False, encoding="utf-8")
+
+    snapshot = build_snapshot(
+        df_polizas,
+        df_siniestros,
+        cfg,
+        meta={
+            "seed": cfg.random_seed,
+            "convergio": convergio,
+            "iteraciones": it,
+            "lambda_scale_final": lambda_scale,
+            "severidad_scale_final": severidad_scale,
+        },
+    )
+    paths_diag = escribir_artefactos(snapshot, output_dir / "diagnostico")
+    print(f"Diagnóstico JSON: {paths_diag['json']}")
+    print(f"Diagnóstico MD:   {paths_diag['md']}")
 
     if convergio:
         print(

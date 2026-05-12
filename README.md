@@ -81,6 +81,7 @@ Cada fila es un siniestro vinculado a una póliza. Campos principales:
 - **Calidad de productor**: factor único por productor ~ N(1.0, 0.15) que escala la frecuencia. Habilita análisis de cartera por productor (tóxicos vs estrella).
 - **Cadena legal coherente**: `con_sentencia` implica `en_juicio` implica `en_mediacion`, siempre.
 - **Validaciones de integridad**: 14 chequeos automáticos después de la generación (fechas, lógica de cobertura, integridad referencial, cadena legal, montos, cancelaciones, etc.).
+- **Diagnóstico y comparación entre corridas**: cada corrida persiste un snapshot JSON + un reporte Markdown en `output/diagnostico/`. El Markdown incluye automáticamente una sección de comparación contra la corrida anterior (si existe), con deltas de métricas y top movers por distribución. Ver [VALIDACIONES_GUIDE.md](VALIDACIONES_GUIDE.md).
 
 ---
 
@@ -135,10 +136,23 @@ Calibración convergida. Iteración=9, lambda_scale=1.2363, severidad_scale=0.15
 ...
 - Loss ratio global (reclamado): 75.52% | Objetivo: 60% - 80% | PASS
 - Frecuencia siniestral: 16.14% | Objetivo: 15% - 20% | PASS
+
+Diagnóstico JSON: output/diagnostico/snapshot_<timestamp>_seed42.json
+Diagnóstico MD:   output/diagnostico/snapshot_<timestamp>_seed42.md
 ```
 
+### Salidas
+
+Cada corrida produce:
+
+- `output/polizas_sinteticas.csv` y `output/siniestros_sinteticos.csv` — datasets principales (sobrescritos en cada corrida).
+- `output/diagnostico/snapshot_<timestamp>_seed<N>.json` — snapshot machine-readable con métricas y distribuciones por área.
+- `output/diagnostico/snapshot_<timestamp>_seed<N>.md` — reporte Markdown con métricas generales, integridad, composición y comparación contra la corrida anterior.
+
+Política: en `output/diagnostico/` se mantienen como máximo **2 pares** de archivos (la corrida actual y la inmediata anterior). La tercera corrida borra automáticamente la más vieja antes de escribir. Esto permite ver de un vistazo el delta de cualquier cambio de parámetro.
+
 ### Customizar distribuciones
-Todos los parámetros estadísticos viven en `config.py`. No hace falta tocar código — basta con editar valores. Ver `CONFIG_GUIDE.md` para una explicación de cada parámetro y su efecto sobre los datos.
+Todos los parámetros estadísticos viven en `config.py`. No hace falta tocar código — basta con editar valores. Ver `CONFIG_GUIDE.md` para una explicación de cada parámetro y su efecto sobre los datos, y `VALIDACIONES_GUIDE.md` para entender cómo leer el reporte de diagnóstico.
 
 ---
 
@@ -163,7 +177,7 @@ Ver también `analisis_recomendaciones.md` para una guía completa de KPIs, grá
 .
 ├── main.py                                    # Entry point y loop de calibración
 ├── config.py                                  # Todos los parámetros (distribuciones, targets, geografía)
-├── validaciones.py                            # Chequeos de integridad y métricas
+├── validaciones.py                            # Re-export de validar_integridad + métricas de calibración
 ├── generadores/
 │   ├── sampling.py                            # Helpers de muestreo (weighted, edad, fechas, antig. carnet)
 │   ├── geografia.py                           # Asignación de provincia/localidad/barrio/zona
@@ -173,11 +187,24 @@ Ver también `analisis_recomendaciones.md` para una guía completa de KPIs, grá
 │   ├── vehiculos.py                           # Catálogo de vehículos (185 modelos, 39 marcas)
 │   ├── polizas.py                             # Orquestador de generación de pólizas
 │   └── siniestros.py                          # Generador de siniestros
+├── diagnostico/
+│   ├── schema.py                              # Helpers para métricas escalares, distribuciones y tablas
+│   ├── runner.py                              # build_snapshot + escribir_artefactos (con rotación)
+│   ├── markdown.py                            # Render del reporte Markdown
+│   ├── diff.py                                # Cálculo de deltas entre snapshots
+│   ├── integridad.py                          # 13 checks de integridad referencial
+│   ├── cartera.py                             # Distribuciones de composición
+│   ├── suscripcion.py                         # Prima media, dispersión, magnitudes por segmento
+│   ├── siniestralidad.py                      # Loss ratio, frecuencia, severidad por dimensión
+│   ├── cohortes.py                            # Retención, bonus-malus, cancelaciones
+│   └── productores.py                         # Concentración, HHI, calidad
 ├── analisis_eda_cartera_completo_v2.ipynb     # Notebook EDA
 ├── CONFIG_GUIDE.md                            # Referencia de parámetros y guía de tuning
+├── VALIDACIONES_GUIDE.md                      # Guía del módulo de diagnóstico y cómo leer el reporte
 ├── analisis_recomendaciones.md                # Guía de KPIs y análisis para presentaciones
 ├── pyproject.toml                             # Dependencias (gestionadas por uv)
-└── output/                                    # CSVs generados (git-ignored)
+└── output/                                    # CSVs y snapshots de diagnóstico (git-ignored)
+    └── diagnostico/                           # snapshot_<timestamp>_seed<N>.json + .md (máx 2 pares)
 ```
 
 ---
