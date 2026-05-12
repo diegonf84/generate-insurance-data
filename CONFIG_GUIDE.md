@@ -52,11 +52,14 @@ Punto de partida del multiplicador de montos. En general no necesita ajustarse a
 
 ## 3. Red de distribución
 
-### `n_productores` (default: `1000`)
-Número de productores únicos en el campo `codigo_productor`. Los productores se distribuyen con una ley de potencia (rango `1.15`), por lo que unos pocos concentran mucho volumen. Aumentar este valor → más diversidad de productores, menor concentración. Disminuirlo → más concentración, útil para simular mercados oligopólicos.
+### `n_productores` (default: `120`)
+Número de productores únicos en el campo `codigo_productor`. Calibrado contra el tamaño típico de una compañía aseguradora mediana argentina (100-150 productores activos). Los productores se distribuyen con una power-law sobre rank (`1/rank^productor_power_law_exponente`), por lo que unos pocos concentran mucho volumen — con los defaults, el top 1 productor tiene ~15% de las pólizas y los top 5 acumulan ~36%. Aumentar este valor → más diversidad, menor concentración. Disminuirlo → más concentración, útil para simular brokers oligopólicos.
 
-### `n_organizadores` (default: `50`)
-Número de grupos organizadores (`ORG-01` a `ORG-50`). Cada organizador agrupa en promedio `n_productores × prob_productor_en_organizador / n_organizadores ≈ 16` productores. Reducir este número aumenta la concentración por organizador.
+### `productor_power_law_exponente` (default: `0.90`)
+Exponente de la power-law sobre el rank del productor. Valores más altos (`1.5+`) producen concentraciones extremas (top 1 con >30%). Valores más bajos (`0.5-0.7`) producen una distribución más plana (top 1 ~5-8%). El default 0.9 ajusta la concentración esperada en una compañía mediana argentina.
+
+### `n_organizadores` (default: `25`)
+Número de grupos organizadores (`ORG-01` a `ORG-25`). Calibrado contra el tamaño típico (20-30 organizadores) de compañías medianas. Cada organizador agrupa en promedio `n_productores × prob_productor_en_organizador / n_organizadores ≈ 4` productores. Reducir este número aumenta la concentración por organizador.
 
 ### `prob_productor_en_organizador` (default: `0.80`)
 Probabilidad de que un productor pertenezca a algún organizador. El 80% de los productores quedan asignados a un `ORG-xx`; el 20% restante tiene `codigo_organizador = NaN`. Bajar este valor → más productores independientes en el dataset.
@@ -91,15 +94,18 @@ Mix de canal de venta. Afecta:
 - **No afecta** frecuencia ni severidad de siniestros directamente.
 
 ### `pesos_medio_pago`
-Distribución del medio de pago: Efectivo / Tarjeta de crédito / Otros. Este campo interactúa con `prob_mora_por_medio_pago`: los pagos con tarjeta de crédito se auto-cobran y nunca generan mora, mientras que los pagos en efectivo tienen alta probabilidad de activar la lógica de mora.
+Distribución de 6 medios de pago: Tarjeta de crédito / Tarjeta de débito / Débito automático CBU / Billetera virtual / Transferencia / Efectivo. Este campo interactúa con `prob_mora_por_medio_pago`: tarjeta de crédito y débito tienen mora prácticamente nula (auto-cobro), mientras que efectivo y transferencia dependen de la acción activa del cliente cada mes y tienen alta probabilidad de mora.
+
+### `pesos_cuotas_por_medio_pago`
+Distribución de cuotas (1/3/6/12) dentro de cada medio de pago. Solo los medios con financiación (Tarjeta de crédito y Débito automático CBU) admiten cuotas > 1; el resto se fuerza a 1. La columna `cantidad_cuotas` se asigna en función de este dict.
 
 ### `pesos_uso`
 Proporción de uso Particular / Comercial / Profesional. Uso Comercial y Profesional aplican un multiplicador ×1.15 sobre lambda en `_lambda_por_segmento()`, por lo que aumentar su peso sube la frecuencia media de la cartera. El flag `es_flota` fuerza uso Comercial en ~2% de las pólizas independientemente de este peso.
 
 ### `pesos_provincia`
-Distribución geográfica. Dado que la zona de riesgo (Muy Alta/Alta/Media-Alta/Media/Baja) se deriva de provincia + localidad, cambiar estos pesos modifica indirectamente la mezcla de zonas:
-- Más peso en CABA → más pólizas zona Muy Alta → mayor frecuencia y severidad promedio.
-- Más peso en Buenos Aires → más pólizas zona Alta (GBA) y Media (interior).
+Distribución geográfica. Dado que la zona de riesgo (CABA Premium / CABA Resto / GBA Norte / GBA Sur/Oeste / Media-Alta / Media / Baja) se deriva de provincia + localidad, cambiar estos pesos modifica indirectamente la mezcla de zonas:
+- Más peso en CABA → más pólizas zona CABA Premium/Resto → mayor frecuencia y severidad promedio.
+- Más peso en Buenos Aires → más pólizas zona GBA Norte/Sur-Oeste (GBA) y Media (interior).
 - Más peso en provincias del interior → más pólizas zona Media-Alta (capitales) y Baja (resto).
 - **Restricción**: las claves deben coincidir exactamente con las entradas de `localidades_por_provincia`.
 
@@ -108,14 +114,16 @@ Distribución geográfica. Dado que la zona de riesgo (Muy Alta/Alta/Media-Alta/
 ## 5. Geografía
 
 ### `localidades_por_provincia`
-Lista de localidades para cada provincia. Se samplea de forma uniforme dentro de cada provincia. La zona de riesgo se asigna en 5 niveles:
-- CABA → Muy Alta
-- GBA (25 municipios en `_GBA_LOCALIDADES`), Córdoba Capital, Rosario → Alta
-- Grandes ciudades y capitales provinciales (en `_CIUDADES_MEDIA_ALTA`) → Media-Alta
+Lista de localidades para cada provincia. Se samplea de forma uniforme dentro de cada provincia. La zona de riesgo se asigna en 7 niveles:
+- CABA barrio en `CABA_PREMIUM_LOCALIDADES` (Palermo, Recoleta, Belgrano, Núñez, Puerto Madero) → CABA Premium
+- Resto de CABA → CABA Resto
+- Buenos Aires con localidad en `GBA_NORTE_LOCALIDADES` (San Isidro, Vicente López, Tigre, Pilar, Escobar, San Fernando) → GBA Norte
+- Resto del GBA → GBA Sur/Oeste
+- Grandes ciudades y capitales provinciales (en `CIUDADES_MEDIA_ALTA`, incluye Córdoba Capital y Rosario) → Media-Alta
 - Restantes localidades de Buenos Aires, Santa Fe, Mendoza, Córdoba → Media
 - Todo lo demás → Baja
 
-Agregar localidades GBA → más pólizas zona Alta. Agregar localidades a `_CIUDADES_MEDIA_ALTA` (en `polizas.py`) → más zona Media-Alta.
+Las constantes `GBA_LOCALIDADES`, `GBA_NORTE_LOCALIDADES`, `GBA_SUR_OESTE_LOCALIDADES`, `CABA_PREMIUM_LOCALIDADES` y `CIUDADES_MEDIA_ALTA` viven en `generadores/geografia.py`. Para mover una localidad de tier (por ejemplo, sumar un partido más al GBA Norte), editarlas ahí y asegurarse de que la zona resultante esté en todos los dicts de zonificación.
 
 ### `barrios_caba` / `barrios_gba`
 Listas de barrios para pólizas de CABA y GBA respectivamente. Son puramente descriptivos: no afectan frecuencia, severidad ni zona de riesgo. Solo enriquecen la columna `barrio` del CSV.
@@ -126,7 +134,7 @@ Listas de barrios para pólizas de CABA y GBA respectivamente. Son puramente des
 
 ### Los tres efectos de la zona
 
-La zona de riesgo (Muy Alta / Alta / Media-Alta / Media / Baja) afecta tres dimensiones distintas e independientes. No es duplicación — cada dict modela un efecto actuarial distinto:
+La zona de riesgo (7 niveles: CABA Premium / CABA Resto / GBA Norte / GBA Sur/Oeste / Media-Alta / Media / Baja) afecta tres dimensiones distintas e independientes. No es duplicación — cada dict modela un efecto actuarial distinto:
 
 | Parámetro | Qué modifica | Dónde se aplica |
 |---|---|---|
@@ -141,30 +149,32 @@ Rango uniforme del multiplicador de zona aplicado a la **prima** (no al siniestr
 ```
 prima ∝ suma_asegurada × tasa_base × factor_prima_por_zona × ...
 ```
-Tiene 5 claves: Muy Alta, Alta, Media-Alta, Media, Baja. Subir los rangos de zona Muy Alta/Alta → primas más altas en CABA/GBA → mejora el LR de esos segmentos.
+Tiene 7 claves (las 7 zonas). Subir los rangos de zonas CABA/GBA → primas más altas en esos segmentos → mejora el LR de esos segmentos.
 
 ### `factor_frecuencia_por_zona`
 Lambda base de la Poisson de siniestros, indexada por zona. Es el parámetro de **frecuencia** (no de severidad ni de prima):
-- Muy Alta: 0.22 → ~22% probabilidad de un siniestro al año por póliza base, antes de modificadores.
-- Alta: 0.18 / Media-Alta: 0.15 / Media: 0.12 / Baja: 0.08.
+- CABA Resto: 0.24 → frecuencia más alta de la cartera.
+- CABA Premium: 0.18 → menor que CABA Resto (vehículos mejor cuidados).
+- GBA Sur/Oeste: 0.20 / GBA Norte: 0.15 / Media-Alta: 0.15 / Media: 0.12 / Baja: 0.08.
 
 Después se le aplican multiplicadores por edad, uso, tipo de vehículo, plan y demografía. Bajar todos los valores → menos siniestros globales → mejor LR. Aumentar el spread → diferencias más marcadas de frecuencia entre zonas.
 
 ### `factor_severidad_por_zona`
-Multiplicador aplicado al **monto del siniestro** (no a la prima). Tiene 5 claves:
-- Muy Alta: 1.25 → los siniestros en CABA cuestan un 25% más.
-- Alta: 1.12 → GBA / Córdoba Capital / Rosario.
-- Media-Alta: 1.05 → grandes capitales provinciales.
-- Media: 0.95 → resto de Bs As / Santa Fe / Mendoza / Córdoba.
-- Baja: 0.82 → provincias menores / zonas rurales.
+**Rango uniforme** (low, high) por zona, muestreado independientemente por cada siniestro. Multiplica el `monto_reclamado`. Tiene 7 claves:
+- CABA Premium: (1.25, 1.55) — vehículos premium, costos elevados de reparación.
+- CABA Resto / GBA Norte: (1.10, 1.30) — autos buenos en buen estado.
+- GBA Sur/Oeste: (0.90, 1.10) — autos populares.
+- Media-Alta: (0.95, 1.15) — grandes capitales provinciales.
+- Media: (0.85, 1.05) — interior de Bs As/Santa Fe/Mendoza/Córdoba.
+- Baja: (0.72, 0.92) — provincias menores / zonas rurales.
 
-Este parámetro controla la **variabilidad del loss ratio entre zonas**. Aumentar el spread produce diferencias más marcadas. Si se pone todos en 1.0, los LR por zona convergen.
+Antes de Tanda 3 este parámetro era un escalar fijo por zona; ahora es un rango. Aumentar el spread (rango más ancho) genera más variabilidad de severidad dentro de la misma zona — útil para entrenar modelos no triviales. Si se pone (1.0, 1.0) en todas, los LR por zona convergen.
 
 ### `tasa_base_rango` (default: `(0.04, 0.06)`)
 Rango uniforme de la tasa técnica sobre la suma asegurada. Sube o baja la prima media de toda la cartera proporcionalmente. Subir el rango → más prima → mejor LR global (el loop de calibración puede ajustar menos agresivamente `severidad_scale`).
 
 ### `factor_cobertura_tarifa`
-Multiplicador de la tasa según plan de cobertura. Define cuánto más cara es cada cobertura relativa a "Todo Riesgo" (que vale 1.0). Cambiar estos valores modifica la prima relativa entre planes pero **no** modifica la siniestralidad por plan — por lo tanto sí afecta el LR por plan de cobertura.
+**Rango uniforme** (low, high) por plan de cobertura. Define cuánto más cara es cada cobertura relativa a Todo Riesgo (≈ 1.0). Cambiar estos rangos modifica la prima relativa entre planes pero **no** modifica la siniestralidad por plan — afecta sí el LR por plan. Antes de Tanda 3 era un escalar; ahora es un rango para evitar primas perfectamente alineadas dentro del mismo plan.
 
 ### `comision_por_canal`
 Rangos de comisión por canal de venta `(min, max)`. Afectan únicamente la columna `comision_pactada` en el CSV. No entran en el cálculo de prima ni en la lógica de siniestros.
@@ -173,14 +183,18 @@ Rangos de comisión por canal de venta `(min, max)`. Afectan únicamente la colu
 
 ## 7. Inflación anual
 
-### `inflacion_anual` (default: `{2021: 1.0, 2022: 1.5, 2023: 2.5, 2024: 4.0}`)
-Multiplicador aplicado al **monto del siniestro** según el año de ocurrencia. Representa la inflación acumulada de costos de reparación/reposición.
+### `inflacion_anual` (default: `{2021: 1.0, 2022: 1.9, 2023: 5.5, 2024: 12.0}`)
+Multiplicador aplicado al **monto del siniestro** según el año de ocurrencia. Calibrado contra el IPC argentino real:
 - 2021 → monto base (×1.0)
-- 2024 → los montos son 4× más altos en términos nominales que en 2021.
+- 2022 → ×1.9 (inflación YoY 2022 ≈ 95%)
+- 2023 → ×5.5 (inflación YoY 2023 ≈ 211%)
+- 2024 → ×12.0 (inflación YoY 2024 ≈ 118%)
 
-Esto introduce tendencia temporal en `monto_reclamado`: los siniestros recientes son nominalmente más caros. Si se agrega el año 2025 (ej. `2025: 6.0`), los siniestros de ese año serán aún mayores.
+Esto introduce una tendencia temporal fuerte en `monto_reclamado`: los siniestros de 2024 son ~12× más caros nominalmente que los de 2021. Si se agrega 2025 (ej. `2025: 16.0`), los siniestros de ese año serán aún mayores.
 
-**Efecto en el LR**: como las primas se fijan al inicio de la vigencia y no se reajustan, años con alta inflación tienden a tener LR más alto. Esto es intencional — simula el efecto del descalce temporal real en seguros argentinos.
+**Efecto en el LR**: como las primas se fijan al inicio de la vigencia y no se reajustan, años con alta inflación tienden a tener LR más alto. Esto es intencional — simula el efecto del descalce temporal real en seguros argentinos. El loop de calibración auto-ajusta `severidad_scale` para mantener el LR global en target, pero los LR por año seguirán mostrando el descalce.
+
+**Cambio de tanda 3**: en versiones anteriores, los factores eran 1.0/1.5/2.5/4.0 (subestimando el IPC real). Si se vuelve a esos valores, también hay que subir `severidad_scale_inicial` de 0.35 a ~1.0 para que la calibración converja.
 
 ---
 
@@ -308,11 +322,14 @@ Las pólizas con `meses_en_mora >= mora_umbral_cancelacion` tienen el doble de p
 
 ### `prob_mora_por_medio_pago`
 Probabilidad de que la lógica de mora se active según el medio de pago:
+- `Tarjeta de crédito: 0.00` — auto-cobro, nunca genera mora.
+- `Tarjeta de débito: 0.05` — eventual falta de saldo.
+- `Débito automático CBU: 0.10` — rechazo por falta de fondos.
+- `Billetera virtual: 0.15` — depende de la disponibilidad en la billetera.
+- `Transferencia: 0.30` — requiere acción manual mensual.
 - `Efectivo: 0.70` — alta probabilidad de generar mora.
-- `Tarjeta de crédito: 0.0` — se auto-cobra, nunca genera mora.
-- `Otros: 0.15` — baja pero posible.
 
-Si el sorteo falla (el random supera la probabilidad), `meses_en_mora = 0` directamente. Esto crea una dependencia causal realista entre medio de pago y morosidad.
+Si el sorteo falla (el random supera la probabilidad), `meses_en_mora = 0` directamente. Esto crea una dependencia causal realista entre medio de pago y morosidad. La mora se recomputa después de la propagación de medio_pago en `asignar_cadenas_renovacion`, para asegurar coherencia entre la columna final y la mora generada.
 
 ### `mora_umbral_cancelacion` (default: `3`)
 Cantidad de meses de mora a partir de los cuales se duplica la probabilidad de cancelación. Refleja la baja de pólizas por falta de pago sostenida.
@@ -362,17 +379,96 @@ Estos valores no son configurables por `Config` pero vale documentarlos para ref
 
 ---
 
-## 14. Reglas de consistencia importantes
+## 14. Variabilidad y variables extendidas
+
+Conjunto de parámetros agregados para enriquecer realismo. Cada uno actúa sobre prima, frecuencia o severidad — la sección 7 del README los lista a nivel de columna.
+
+### `pesos_lag_siniestro`
+Mezcla de 4 regímenes para el lag (días entre inicio de vigencia y fecha de siniestro). Se combina con `_PESOS_MES_DANIO` (estacionalidad mensual) por producto de pesos por día:
+- `extremo (0-7d): 0.01` — siniestros casi inmediatos. Señal de fraude.
+- `temprano (8-30d): 0.04` — poca exposición acumulada.
+- `adaptacion (31-90d): 0.10` — primeros meses aún suprimidos.
+- `normal (91-365d): 0.85` — el grueso de la cartera.
+
+Aumentar el peso de `extremo` enriquece la cola izquierda → útil para entrenar modelos de detección de fraude / early-claim score.
+
+### Antigüedad de carnet
+
+- **`edad_carnet_minimo` (default: `17`)** — edad legal mínima de carnet en Argentina. Define el techo: `antiguedad_carnet ≤ edad - edad_carnet_minimo`.
+- **`antiguedad_carnet_beta` (default: `(5.0, 2.0)`)** — parámetros α, β de la Beta usada para muestrear la fracción del máximo posible. Sesgado al límite superior (la mayoría de conductores tiene muchos años de carnet relativos a su edad). Bajar α y subir β invierte el sesgo.
+- **`factor_antiguedad_carnet`** — multiplicadores sobre λ por banda: novel (<2 años) ×1.25, intermedio (2-4) ×1.10, establecido (5-9) ×1.00, experimentado (≥10) ×0.95.
+
+### Franquicia
+
+- **`pesos_franquicia` (default: `{0.00: 0.40, 0.05: 0.50, 0.20: 0.10}`)** — distribución de la franquicia (fracción de la suma asegurada). Solo aplica a planes con cobertura de Casco (Terceros Completo / Todo Riesgo). Responsabilidad Civil siempre tiene franquicia = 0.
+- **`factor_franquicia` (default: `{0.00: 1.00, 0.05: 0.93, 0.20: 0.82}`)** — descuento sobre prima por nivel de franquicia.
+
+La franquicia se descuenta de `monto_pagado` (no de `monto_reclamado`) solo para siniestros con `cobertura_casco=True`. Para siniestros de RC, no aplica (el pago va al tercero, no al asegurado).
+
+### Bonus-malus
+
+- **`bonus_malus_nivel_inicial` (default: `3`)** — nivel inicial para clientes con numero_renovacion = 0.
+- **`bonus_malus_p_sin_claim` (default: `0.78`)** — probabilidad de bajar un nivel (sin siniestros) por renovación. El complemento (0.22) sube un nivel.
+- **`factor_bonus_malus`** — factor multiplicativo sobre prima: nivel 0 = 0.80 (max descuento), nivel 3 = 1.00 (base), nivel 5 = 1.40 (max recargo).
+
+El nivel se simula como random walk vectorizado sobre el número de renovaciones del cliente. Bajar `p_sin_claim` produce niveles más altos en la cartera (más recargos visibles).
+
+### Rastreador (Lojack/Ituran)
+
+- **`prob_rastreador_por_zona`** — probabilidad de que la póliza tenga rastreador, por zona. Mayor en zonas de mayor riesgo de robo (Muy Alta 35%, Baja 5%).
+- **`factor_prima_rastreador` (default: `0.90`)** — descuento del 10% sobre prima.
+- **`factor_robo_rastreador` (default: `0.50`)** — reduce a la mitad la probabilidad de Robo total y Robo parcial al sortear el tipo de daño.
+
+### Tipo de combustible
+
+- **`pesos_combustible_por_tipo`** — distribución por tipo de vehículo (Nafta / Diésel / GNC / Híbrido / Eléctrico). Motos siempre Nafta; camionetas y utilitarios mayoría Diésel; autos mezcla típica.
+- **`factor_prima_combustible`** — recargo por combustible: GNC +5%, Eléctrico +8%, Híbrido +3%, Diésel +2%, Nafta base.
+- **`factor_incendio_gnc` (default: `1.6`)** — multiplica la probabilidad de Incendio en vehículos GNC.
+- **`factor_severidad_choque_electrico` (default: `1.30`)** — incrementa severidad de Choque para vehículos eléctricos (baterías costosas).
+
+### Vehículo
+
+El catálogo en `generadores/vehiculos.py` tiene 185 modelos en 39 marcas, con una columna `peso_relativo` por modelo que controla la frecuencia relativa dentro de cada `tipo_vehiculo`. Los autos populares (Gol, Cronos, Onix, Sandero, etc.) tienen pesos 8-15; los premium (Audi, BMW, Mercedes) pesos 0.3-1.0; las motos populares (Wave, CG160, Smash) pesos 8-12. Premium share resultante: ~2% en autos.
+
+### Calidad de productor (Tanda 3)
+
+- **`factor_calidad_productor_sigma` (default: `0.15`)** — desvío de la N(1.0, σ) usada para asignar un factor único por productor.
+- **`factor_calidad_productor_clip` (default: `(0.55, 1.55)`)** — recortes para evitar productores con frecuencia degenerada.
+
+El factor se sortea una sola vez por productor con un RNG independiente (`seed + 7777`), garantizando estabilidad entre iteraciones de calibración. Cada póliza hereda el factor de su productor (columna `factor_calidad_productor` en el CSV). En `_lambda_por_segmento`, multiplica la lambda de Poisson → productores con factor > 1.15 son "tóxicos" (más siniestros), factor < 0.85 son "estrella". Permite el análisis de red productores-organizadores ya mencionado en `analisis_recomendaciones.md`.
+
+### Nuevos tipos de daño (Tanda 3)
+
+Se agregaron cuatro tipos al catálogo original de 7:
+- **Cristales/Parabrisas**: alta frecuencia, baja severidad (μ=13.2, σ=0.4). Solo casco. No aplica a motos.
+- **Vandalismo**: media frecuencia, severidad media. Pico en Dic-Feb (público en la calle).
+- **Inundación**: baja frecuencia, alta severidad. Pico Oct-Mar (estación lluviosa argentina).
+- **Daño a terceros con lesiones**: severidad muy alta (μ=16.5, σ=0.9 — mediana ~15M). RC pura, mayor incidencia en motos (μ=16.8).
+
+Todos los tipos están consistentemente definidos en `prob_tipo_danio_por_zona`, `prob_tipo_danio_moto`, `severidad_lognormal`, `severidad_lognormal_moto` y `_PESOS_MES_DANIO`. La lógica `_cobertura_casco` usa los frozensets `_DANIOS_CASCO` y `_DANIOS_RC` en `siniestros.py`.
+
+### Motivos de rechazo adicionales (Tanda 3)
+
+A los 5 motivos originales se sumaron 3:
+- **Alcoholemia positiva** (0.08)
+- **Conductor no habilitado** (0.08)
+- **Denuncia tardía (>72hs)** (0.08) — sesgo contextual ×3 cuando `lag_denuncia > 3` días.
+
+---
+
+## 15. Reglas de consistencia importantes
 
 Al modificar los parámetros, respetar estas dependencias:
 
 1. **Suma de pesos de provincia**: No es estrictamente necesario que sumen 1 (se normalizan), pero si se agregan provincias nuevas hay que agregarlas también en `localidades_por_provincia`.
 
-2. **Tipos de daño**: Los 7 tipos (`Robo total`, `Robo parcial`, `Choque`, `Incendio`, `Granizo`, `Daño a terceros`, `Otros`) deben existir como claves en `prob_tipo_danio_por_zona`, `severidad_lognormal`, `prob_tipo_danio_moto` y `severidad_lognormal_moto`. También están hardcodeados en `_PESOS_MES_DANIO` en `siniestros.py`.
+2. **Tipos de daño**: Ver la regla 6 más abajo — la lista canónica son los 11 tipos extendidos (Tanda 3).
 
 3. **GBA localities**: Las localidades de Buenos Aires que deben disparar zona Alta están en `GBA_LOCALIDADES` (frozenset en `generadores/geografia.py`). Las ciudades que deben disparar zona Media-Alta están en `CIUDADES_MEDIA_ALTA`. Si se agregan localidades, actualizar el frozenset correspondiente.
 
-5. **Zone dict key alignment**: todos los dicts con claves de zona (`factor_prima_por_zona`, `factor_frecuencia_por_zona`, `factor_severidad_por_zona`, `prob_tipo_danio_por_zona`) deben tener las mismas 5 claves: `Muy Alta`, `Alta`, `Media-Alta`, `Media`, `Baja`.
+5. **Zone dict key alignment**: todos los dicts con claves de zona (`factor_prima_por_zona`, `factor_frecuencia_por_zona`, `factor_severidad_por_zona`, `prob_tipo_danio_por_zona`, `prob_rastreador_por_zona`) deben tener las mismas 7 claves: `CABA Premium`, `CABA Resto`, `GBA Norte`, `GBA Sur/Oeste`, `Media-Alta`, `Media`, `Baja`. La lista canónica de zonas válidas también está en `validaciones.py:zonas_validas`.
+
+6. **Tipos de daño extendidos**: Los 11 tipos (`Robo total`, `Robo parcial`, `Choque`, `Incendio`, `Granizo`, `Cristales`, `Vandalismo`, `Inundación`, `Daño a terceros`, `Daño a terceros con lesiones`, `Otros`) deben aparecer en `prob_tipo_danio_por_zona`, `severidad_lognormal` y `_PESOS_MES_DANIO`. Para motos, `prob_tipo_danio_moto` y `severidad_lognormal_moto` omiten `Cristales` (no aplica). La lógica casco/RC vive en los frozensets `_DANIOS_CASCO` y `_DANIOS_RC`.
 
 4. **`inflacion_anual`**: debe tener una entrada para cada año entre `fecha_inicio.year` y `fecha_fin.year`. Si se extiende `fecha_fin` a 2025, agregar `2025: <factor>`.
 

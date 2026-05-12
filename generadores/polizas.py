@@ -69,7 +69,7 @@ def _asignar_productor_organizador(
     n = len(df)
     productores = np.array([f"PROD-{i:04d}" for i in range(1, cfg.n_productores + 1)])
     ranks = np.arange(1, cfg.n_productores + 1)
-    probs_prod = 1 / np.power(ranks, 1.15)
+    probs_prod = 1 / np.power(ranks, cfg.productor_power_law_exponente)
     probs_prod = probs_prod / probs_prod.sum()
     df["codigo_productor"] = rng.choice(productores, size=n, p=probs_prod)
 
@@ -93,6 +93,19 @@ def _asignar_productor_organizador(
         else:
             prod_to_org[prod] = None
     df["codigo_organizador"] = df["codigo_productor"].map(prod_to_org)
+
+    # Quality factor per productor (separate RNG → stable across calibration
+    # iterations). Productores con factor > 1.15 son "tóxicos", < 0.85 "estrella".
+    rng_qual = np.random.default_rng(cfg.random_seed + 7777)
+    factors_qual = np.clip(
+        rng_qual.normal(1.0, cfg.factor_calidad_productor_sigma, size=cfg.n_productores),
+        cfg.factor_calidad_productor_clip[0],
+        cfg.factor_calidad_productor_clip[1],
+    )
+    prod_to_qual = dict(zip(productores, factors_qual))
+    df["factor_calidad_productor"] = (
+        df["codigo_productor"].map(prod_to_qual).round(4)
+    )
 
     comisiones = []
     for canal in df["canal_venta"].values:

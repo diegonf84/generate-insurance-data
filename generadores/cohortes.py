@@ -101,7 +101,7 @@ def asignar_cadenas_renovacion(
         "tipo_vehiculo", "marca_vehiculo", "modelo_vehiculo", "anio_vehiculo",
         "provincia", "localidad", "zona_riesgo", "barrio",
         "genero_asegurado", "ocupacion",
-        "codigo_productor", "codigo_organizador",
+        "codigo_productor", "codigo_organizador", "factor_calidad_productor",
         "medio_pago", "cantidad_cuotas",
         "franquicia", "tiene_rastreador", "tipo_combustible",
     ]

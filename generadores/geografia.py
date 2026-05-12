@@ -15,6 +15,20 @@ GBA_LOCALIDADES: frozenset[str] = frozenset({
     "San Miguel", "Moreno", "Pilar", "Escobar", "Vicente López",
 })
 
+# Northern GBA — higher SES, mostly residential, more directed-theft risk
+# than petty crime, premium vehicle parc.
+GBA_NORTE_LOCALIDADES: frozenset[str] = frozenset({
+    "San Isidro", "Vicente López", "Tigre", "Pilar", "Escobar", "San Fernando",
+})
+
+# Southern + Western GBA — higher claim frequency, popular vehicle parc.
+GBA_SUR_OESTE_LOCALIDADES: frozenset[str] = GBA_LOCALIDADES - GBA_NORTE_LOCALIDADES
+
+# CABA premium neighborhoods — high vehicle values, high theft surveillance.
+CABA_PREMIUM_LOCALIDADES: frozenset[str] = frozenset({
+    "Palermo", "Recoleta", "Belgrano", "Núñez", "Puerto Madero",
+})
+
 CIUDADES_MEDIA_ALTA: frozenset[str] = frozenset({
     "La Plata", "Mar del Plata", "Bahía Blanca",
     "Mendoza Capital", "Godoy Cruz", "Guaymallén", "Las Heras", "Maipú",
@@ -24,18 +38,19 @@ CIUDADES_MEDIA_ALTA: frozenset[str] = frozenset({
     "Resistencia", "Posadas", "Corrientes Capital", "San Juan Capital",
     "San Salvador de Jujuy", "Santiago del Estero Capital", "San Luis Capital",
     "Formosa Capital", "Catamarca Capital", "Bariloche",
+    "Córdoba Capital", "Rosario",
 })
 
 
 def asignar_zona(provincia: str, localidad: str) -> str:
     if provincia == "CABA":
-        return "Muy Alta"
-    if provincia == "Buenos Aires" and localidad in GBA_LOCALIDADES:
-        return "Alta"
-    if provincia == "Córdoba" and localidad == "Córdoba Capital":
-        return "Alta"
-    if provincia == "Santa Fe" and localidad == "Rosario":
-        return "Alta"
+        if localidad in CABA_PREMIUM_LOCALIDADES:
+            return "CABA Premium"
+        return "CABA Resto"
+    if provincia == "Buenos Aires" and localidad in GBA_NORTE_LOCALIDADES:
+        return "GBA Norte"
+    if provincia == "Buenos Aires" and localidad in GBA_SUR_OESTE_LOCALIDADES:
+        return "GBA Sur/Oeste"
     if localidad in CIUDADES_MEDIA_ALTA:
         return "Media-Alta"
     if provincia in {"Buenos Aires", "Santa Fe", "Mendoza", "Córdoba"}:

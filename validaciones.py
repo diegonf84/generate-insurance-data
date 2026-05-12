@@ -28,7 +28,10 @@ def validar_integridad(df_polizas: pd.DataFrame, df_siniestros: pd.DataFrame) ->
         resultados["primas_y_suma_positivas"] = bool(
             (df_polizas["prima"] > 0).all() and (df_polizas["suma_asegurada"] > 0).all()
         )
-        zonas_validas = {"Muy Alta", "Alta", "Media-Alta", "Media", "Baja"}
+        zonas_validas = {
+            "CABA Premium", "CABA Resto", "GBA Norte", "GBA Sur/Oeste",
+            "Media-Alta", "Media", "Baja",
+        }
         resultados["zona_riesgo_valida"] = bool(
             df_polizas["zona_riesgo"].isin(zonas_validas).all()
         )
@@ -126,7 +129,10 @@ def validar_integridad(df_polizas: pd.DataFrame, df_siniestros: pd.DataFrame) ->
         resultados["cancelacion_coherente"] = True
 
     # ── Zone value validation ────────────────────────────────────────────────
-    zonas_validas = {"Muy Alta", "Alta", "Media-Alta", "Media", "Baja"}
+    zonas_validas = {
+            "CABA Premium", "CABA Resto", "GBA Norte", "GBA Sur/Oeste",
+            "Media-Alta", "Media", "Baja",
+        }
     resultados["zona_riesgo_valida"] = bool(
         df_polizas["zona_riesgo"].isin(zonas_validas).all()
     )

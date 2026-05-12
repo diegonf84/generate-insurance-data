@@ -17,14 +17,30 @@ class Config:
     target_loss: tuple[float, float] = (0.60, 0.80)
     tolerancia_distribucion: float = 0.02
 
-    max_iteraciones_calibracion: int = 12
+    max_iteraciones_calibracion: int = 15
     lambda_scale_inicial: float = 0.88
-    severidad_scale_inicial: float = 1.0
+    # Ajustado para la inflación realista de Tanda 3: con factores 1.0/1.9/5.5/12.0,
+    # severidad_scale debe arrancar más bajo para converger dentro del máximo de
+    # iteraciones. Antes (con inflación 1.0/1.5/2.5/4.0) este valor era 1.0.
+    severidad_scale_inicial: float = 0.35
 
-    n_productores: int = 1000
-    n_organizadores: int = 50
+    # Tamaño típico de cartera para una compañía mediana argentina:
+    # ~100-150 productores activos, ~20-30 organizadores.
+    n_productores: int = 120
+    n_organizadores: int = 25
     prob_productor_en_organizador: float = 0.80
     p_outlier_poliza: float = 0.005
+    # Exponente de la power-law sobre rank de productor (1/rank^exponente).
+    # Con n=120 productores, exponente ≈ 0.9 produce un top productor con
+    # ~12% de pólizas — Pareto realista para compañías medianas.
+    productor_power_law_exponente: float = 0.90
+
+    # Calidad de productor: factor sobre lambda de siniestralidad por productor.
+    # N(1.0, sigma), recortado a [min, max]. Productores con factor > 1.15 son
+    # "tóxicos" (más siniestros); < 0.85 son "estrella". Permite el análisis
+    # de cartera por calidad de productor.
+    factor_calidad_productor_sigma: float = 0.15
+    factor_calidad_productor_clip: tuple[float, float] = (0.55, 1.55)
 
     pesos_tipo_vehiculo: dict[str, float] = field(
         default_factory=lambda: {
@@ -317,40 +333,49 @@ class Config:
     # - factor_severidad_por_zona: multiplier on each claim AMOUNT (severity).
     factor_prima_por_zona: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
-            "Muy Alta": (1.40, 1.60),
-            "Alta": (1.25, 1.45),
-            "Media-Alta": (1.10, 1.25),
-            "Media": (0.95, 1.10),
-            "Baja": (0.70, 0.90),
+            "CABA Premium":   (1.55, 1.75),
+            "CABA Resto":     (1.35, 1.55),
+            "GBA Norte":      (1.25, 1.45),
+            "GBA Sur/Oeste":  (1.30, 1.50),
+            "Media-Alta":     (1.10, 1.25),
+            "Media":          (0.95, 1.10),
+            "Baja":           (0.70, 0.90),
         }
     )
 
     factor_frecuencia_por_zona: dict[str, float] = field(
         default_factory=lambda: {
-            "Muy Alta": 0.22,
-            "Alta": 0.18,
-            "Media-Alta": 0.15,
-            "Media": 0.12,
-            "Baja": 0.08,
+            "CABA Premium":   0.18,
+            "CABA Resto":     0.24,
+            "GBA Norte":      0.15,
+            "GBA Sur/Oeste":  0.20,
+            "Media-Alta":     0.15,
+            "Media":          0.12,
+            "Baja":           0.08,
         }
     )
 
-    factor_severidad_por_zona: dict[str, float] = field(
+    # Rango uniforme por zona — sampleado por siniestro, no por póliza.
+    factor_severidad_por_zona: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
-            "Muy Alta": 1.25,
-            "Alta": 1.12,
-            "Media-Alta": 1.05,
-            "Media": 0.95,
-            "Baja": 0.82,
+            "CABA Premium":   (1.25, 1.55),
+            "CABA Resto":     (1.10, 1.30),
+            "GBA Norte":      (1.10, 1.30),
+            "GBA Sur/Oeste":  (0.90, 1.10),
+            "Media-Alta":     (0.95, 1.15),
+            "Media":          (0.85, 1.05),
+            "Baja":           (0.72, 0.92),
         }
     )
 
     tasa_base_rango: tuple[float, float] = (0.04, 0.06)
-    factor_cobertura_tarifa: dict[str, float] = field(
+    # Rangos uniformes — el promedio se mantiene cerca del valor original pero
+    # con ruido +/-5% para evitar primas demasiado uniformes por plan.
+    factor_cobertura_tarifa: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
-            "Responsabilidad Civil": 0.50,
-            "Terceros Completo": 0.75,
-            "Todo Riesgo": 1.00,
+            "Responsabilidad Civil": (0.45, 0.55),
+            "Terceros Completo":     (0.70, 0.80),
+            "Todo Riesgo":           (0.95, 1.05),
         }
     )
 
@@ -387,30 +412,44 @@ class Config:
 
     severidad_lognormal: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
-            "Robo total": (15.5, 0.6),
-            "Robo parcial": (13.5, 0.7),
-            "Choque": (13.8, 0.8),
-            "Incendio": (15.0, 0.7),
-            "Granizo": (12.5, 0.5),
-            "Daño a terceros": (14.5, 1.0),
-            "Otros": (12.0, 0.6),
+            "Robo total":                    (15.5, 0.6),
+            "Robo parcial":                  (13.5, 0.7),
+            "Choque":                        (13.8, 0.8),
+            "Incendio":                      (15.0, 0.7),
+            "Granizo":                       (12.5, 0.5),
+            "Cristales":                     (13.2, 0.4),
+            "Vandalismo":                    (13.5, 0.6),
+            "Inundación":                    (15.0, 0.6),
+            "Daño a terceros":               (14.5, 1.0),
+            "Daño a terceros con lesiones":  (16.5, 0.9),
+            "Otros":                         (12.0, 0.6),
         }
     )
 
     severidad_lognormal_moto: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
-            "Robo total": (14.2, 0.6),
-            "Robo parcial": (12.5, 0.7),
-            "Choque": (12.8, 0.8),
-            "Incendio": (13.5, 0.7),
-            "Granizo": (11.5, 0.5),
-            "Daño a terceros": (13.5, 1.0),
-            "Otros": (11.0, 0.6),
+            "Robo total":                    (14.2, 0.6),
+            "Robo parcial":                  (12.5, 0.7),
+            "Choque":                        (12.8, 0.8),
+            "Incendio":                      (13.5, 0.7),
+            "Granizo":                       (11.5, 0.5),
+            "Vandalismo":                    (12.5, 0.6),
+            "Inundación":                    (13.5, 0.6),
+            "Daño a terceros":               (13.5, 1.0),
+            "Daño a terceros con lesiones":  (16.8, 0.9),
+            "Otros":                         (11.0, 0.6),
         }
     )
 
+    # Factor de inflación nominal acumulado desde 2021 (baseline).
+    # Calibrado contra IPC argentino real:
+    # 2021: ~50% YoY, 2022: ~95%, 2023: ~211%, 2024: ~118%
+    # → acumulados: 1.0 / 1.9 / 5.5 / 12.0 (aprox).
+    # El loop de calibración ajusta severidad_scale para mantener el LR en
+    # target, así que cambiar estos valores no rompe el pipeline — solo
+    # mueve la magnitud absoluta de los montos.
     inflacion_anual: dict[int, float] = field(
-        default_factory=lambda: {2021: 1.0, 2022: 1.5, 2023: 2.5, 2024: 4.0}
+        default_factory=lambda: {2021: 1.0, 2022: 1.9, 2023: 5.5, 2024: 12.0}
     )
 
     # ── Lag de siniestros (días desde inicio de vigencia) ────────────────────
@@ -432,33 +471,70 @@ class Config:
 
     prob_tipo_danio_por_zona: dict[str, dict[str, float]] = field(
         default_factory=lambda: {
-            "Muy Alta": {
-                "Robo total": 0.18, "Robo parcial": 0.12, "Choque": 0.30,
-                "Incendio": 0.03, "Granizo": 0.05, "Daño a terceros": 0.25, "Otros": 0.07,
+            "CABA Premium": {
+                "Robo total": 0.08, "Robo parcial": 0.05, "Choque": 0.30,
+                "Incendio": 0.02, "Granizo": 0.04,
+                "Cristales": 0.11, "Vandalismo": 0.05, "Inundación": 0.02,
+                "Daño a terceros": 0.22, "Daño a terceros con lesiones": 0.05,
+                "Otros": 0.06,
             },
-            "Alta": {
-                "Robo total": 0.15, "Robo parcial": 0.10, "Choque": 0.35,
-                "Incendio": 0.03, "Granizo": 0.05, "Daño a terceros": 0.25, "Otros": 0.07,
+            "CABA Resto": {
+                "Robo total": 0.16, "Robo parcial": 0.11, "Choque": 0.22,
+                "Incendio": 0.03, "Granizo": 0.04,
+                "Cristales": 0.08, "Vandalismo": 0.06, "Inundación": 0.02,
+                "Daño a terceros": 0.18, "Daño a terceros con lesiones": 0.04,
+                "Otros": 0.06,
+            },
+            "GBA Norte": {
+                "Robo total": 0.10, "Robo parcial": 0.06, "Choque": 0.30,
+                "Incendio": 0.02, "Granizo": 0.05,
+                "Cristales": 0.09, "Vandalismo": 0.04, "Inundación": 0.02,
+                "Daño a terceros": 0.22, "Daño a terceros con lesiones": 0.05,
+                "Otros": 0.05,
+            },
+            "GBA Sur/Oeste": {
+                "Robo total": 0.15, "Robo parcial": 0.10, "Choque": 0.28,
+                "Incendio": 0.04, "Granizo": 0.05,
+                "Cristales": 0.06, "Vandalismo": 0.05, "Inundación": 0.02,
+                "Daño a terceros": 0.16, "Daño a terceros con lesiones": 0.04,
+                "Otros": 0.05,
             },
             "Media-Alta": {
-                "Robo total": 0.10, "Robo parcial": 0.07, "Choque": 0.38,
-                "Incendio": 0.03, "Granizo": 0.07, "Daño a terceros": 0.27, "Otros": 0.08,
+                "Robo total": 0.08, "Robo parcial": 0.05, "Choque": 0.32,
+                "Incendio": 0.03, "Granizo": 0.07,
+                "Cristales": 0.07, "Vandalismo": 0.04, "Inundación": 0.02,
+                "Daño a terceros": 0.21, "Daño a terceros con lesiones": 0.04,
+                "Otros": 0.07,
             },
             "Media": {
-                "Robo total": 0.08, "Robo parcial": 0.05, "Choque": 0.40,
-                "Incendio": 0.03, "Granizo": 0.08, "Daño a terceros": 0.28, "Otros": 0.08,
+                "Robo total": 0.06, "Robo parcial": 0.04, "Choque": 0.34,
+                "Incendio": 0.03, "Granizo": 0.08,
+                "Cristales": 0.06, "Vandalismo": 0.03, "Inundación": 0.02,
+                "Daño a terceros": 0.22, "Daño a terceros con lesiones": 0.05,
+                "Otros": 0.07,
             },
             "Baja": {
-                "Robo total": 0.03, "Robo parcial": 0.02, "Choque": 0.45,
-                "Incendio": 0.04, "Granizo": 0.10, "Daño a terceros": 0.28, "Otros": 0.08,
+                "Robo total": 0.02, "Robo parcial": 0.02, "Choque": 0.38,
+                "Incendio": 0.04, "Granizo": 0.10,
+                "Cristales": 0.05, "Vandalismo": 0.02, "Inundación": 0.02,
+                "Daño a terceros": 0.22, "Daño a terceros con lesiones": 0.06,
+                "Otros": 0.07,
             },
         }
     )
 
     prob_tipo_danio_moto: dict[str, float] = field(
         default_factory=lambda: {
-            "Choque": 0.45, "Daño a terceros": 0.18, "Robo parcial": 0.12,
-            "Robo total": 0.08, "Otros": 0.12, "Granizo": 0.03, "Incendio": 0.02,
+            "Choque": 0.36,
+            "Daño a terceros": 0.13,
+            "Daño a terceros con lesiones": 0.08,
+            "Robo parcial": 0.11,
+            "Robo total": 0.08,
+            "Vandalismo": 0.05,
+            "Inundación": 0.01,
+            "Otros": 0.11,
+            "Granizo": 0.03,
+            "Incendio": 0.04,
         }
     )
 
@@ -483,11 +559,14 @@ class Config:
     # ── NEW: Motivo de rechazo del siniestro ────────────────────────────────
     pesos_motivo_rechazo: dict[str, float] = field(
         default_factory=lambda: {
-            "Falta de cobertura": 0.28,
-            "Mora en el pago": 0.22,
-            "Exclusión contractual": 0.18,
-            "Documentación incompleta": 0.17,
-            "Fraude presunto": 0.15,
+            "Falta de cobertura":          0.22,
+            "Mora en el pago":             0.18,
+            "Exclusión contractual":       0.13,
+            "Documentación incompleta":    0.13,
+            "Fraude presunto":             0.10,
+            "Alcoholemia positiva":        0.08,
+            "Conductor no habilitado":     0.08,
+            "Denuncia tardía (>72hs)":     0.08,
         }
     )
 
@@ -635,11 +714,13 @@ class Config:
     # Mayor en zonas de mayor riesgo de robo (es donde la inversión se justifica).
     prob_rastreador_por_zona: dict[str, float] = field(
         default_factory=lambda: {
-            "Muy Alta":   0.35,
-            "Alta":       0.28,
-            "Media-Alta": 0.18,
-            "Media":      0.10,
-            "Baja":       0.05,
+            "CABA Premium":   0.42,
+            "CABA Resto":     0.32,
+            "GBA Norte":      0.38,
+            "GBA Sur/Oeste":  0.25,
+            "Media-Alta":     0.18,
+            "Media":          0.10,
+            "Baja":           0.05,
         }
     )
     # Descuento sobre prima por tener rastreador.

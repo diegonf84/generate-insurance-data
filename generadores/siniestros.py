@@ -12,14 +12,18 @@ from config import Config
 _PESOS_MES_DANIO: dict[str, list[float]] = {
     k: [x / sum(v) for x in v]
     for k, v in {
-        #                    Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  Sep  Oct  Nov  Dec
-        "Granizo":          [12., 12., 10.,  3.,  2.,  2.,  2.,  2.,  3., 10., 16., 14.],
-        "Choque":           [ 8.,  7.,  8.,  8.,  8.,  9., 10., 10.,  8.,  8.,  8.,  8.],
-        "Robo total":       [12., 12.,  9.,  8.,  7.,  7.,  7.,  7.,  8.,  8.,  7.,  8.],
-        "Robo parcial":     [12., 12.,  9.,  8.,  7.,  7.,  7.,  7.,  8.,  8.,  7.,  8.],
-        "Incendio":         [ 8.,  8.,  8.,  8.,  8.,  9.,  9.,  9.,  8.,  8.,  8.,  9.],
-        "Daño a terceros":  [ 8.,  8.,  8.,  8.,  8.,  9.,  9.,  9.,  8.,  8.,  8.,  9.],
-        "Otros":            [ 8.,  8.,  8.,  8.,  8.,  8.,  8.,  8.,  9.,  9.,  9.,  9.],
+        #                              Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  Sep  Oct  Nov  Dec
+        "Granizo":                    [12., 12., 10.,  3.,  2.,  2.,  2.,  2.,  3., 10., 16., 14.],
+        "Choque":                     [ 8.,  7.,  8.,  8.,  8.,  9., 10., 10.,  8.,  8.,  8.,  8.],
+        "Robo total":                 [12., 12.,  9.,  8.,  7.,  7.,  7.,  7.,  8.,  8.,  7.,  8.],
+        "Robo parcial":               [12., 12.,  9.,  8.,  7.,  7.,  7.,  7.,  8.,  8.,  7.,  8.],
+        "Incendio":                   [ 8.,  8.,  8.,  8.,  8.,  9.,  9.,  9.,  8.,  8.,  8.,  9.],
+        "Daño a terceros":            [ 8.,  8.,  8.,  8.,  8.,  9.,  9.,  9.,  8.,  8.,  8.,  9.],
+        "Daño a terceros con lesiones":[ 8.,  8.,  8.,  8.,  8.,  9.,  9.,  9.,  8.,  8.,  8.,  9.],
+        "Cristales":                  [ 9.,  9.,  8.,  7.,  7.,  7.,  7.,  8.,  9., 10.,  9., 10.],
+        "Vandalismo":                 [10., 10.,  8.,  7.,  7.,  7.,  7.,  7.,  7.,  8., 10., 12.],
+        "Inundación":                 [12., 12., 10.,  6.,  5.,  4.,  4.,  4.,  5., 10., 14., 14.],
+        "Otros":                      [ 8.,  8.,  8.,  8.,  8.,  8.,  8.,  8.,  9.,  9.,  9.,  9.],
     }.items()
 }
 
@@ -80,6 +84,9 @@ def _lambda_por_segmento(row: pd.Series, cfg: Config) -> float:
         lam *= factores_carnet.get("experimentado", 1.0)
     else:
         lam *= factores_carnet.get("establecido", 1.0)
+
+    # Productor quality
+    lam *= float(row.get("factor_calidad_productor", 1.0))
 
     return lam
 
@@ -150,17 +157,27 @@ def _sample_fecha_siniestro(
 
 
 def _terceros_involucrados(rng: np.random.Generator, tipo_danio: str) -> bool:
-    if tipo_danio == "Daño a terceros":
+    if tipo_danio in {"Daño a terceros", "Daño a terceros con lesiones"}:
         return True
     if tipo_danio == "Choque":
         return bool(rng.random() < 0.60)
     return False
 
 
+_DANIOS_CASCO: frozenset[str] = frozenset({
+    "Robo total", "Robo parcial", "Choque", "Incendio", "Granizo",
+    "Cristales", "Vandalismo", "Inundación", "Otros",
+})
+
+_DANIOS_RC: frozenset[str] = frozenset({
+    "Daño a terceros", "Daño a terceros con lesiones",
+})
+
+
 def _cobertura_casco(plan: str, tipo_danio: str) -> bool:
     if plan not in {"Terceros Completo", "Todo Riesgo"}:
         return False
-    return tipo_danio in {"Robo total", "Robo parcial", "Choque", "Incendio", "Granizo", "Otros"}
+    return tipo_danio in _DANIOS_CASCO
 
 
 def _bien_recuperado(rng: np.random.Generator, tipo_danio: str):
@@ -265,6 +282,7 @@ def _asignar_motivo_rechazo(
     cobertura_casco: bool,
     plan_cobertura: str,
     meses_mora: int,
+    lag_denuncia: int,
 ) -> object:
     """Assign rejection reason. Returns pd.NA for non-rejected claims."""
     if estado != "Rechazado":
@@ -274,9 +292,11 @@ def _asignar_motivo_rechazo(
 
     # Contextual biases
     if not cobertura_casco and plan_cobertura == "Responsabilidad Civil":
-        pesos["Falta de cobertura"] = pesos.get("Falta de cobertura", 0.28) * 2.0
+        pesos["Falta de cobertura"] = pesos.get("Falta de cobertura", 0.22) * 2.0
     if meses_mora >= 3:
-        pesos["Mora en el pago"] = pesos.get("Mora en el pago", 0.22) * 2.5
+        pesos["Mora en el pago"] = pesos.get("Mora en el pago", 0.18) * 2.5
+    if lag_denuncia > 3:
+        pesos["Denuncia tardía (>72hs)"] = pesos.get("Denuncia tardía (>72hs)", 0.08) * 3.0
 
     vals = list(pesos.keys())
     p = np.array(list(pesos.values()), dtype=float)
@@ -361,8 +381,8 @@ def generar_siniestros(
             lag_denuncia = int(min(30, max(0, round(rng.exponential(5.0)))))
             fecha_denuncia = min(today, fecha_siniestro + timedelta(days=lag_denuncia))
 
-            factor_zona_sev = cfg.factor_severidad_por_zona.get(
-                str(poliza["zona_riesgo"]), 1.0
+            factor_zona_sev = rng.uniform(
+                *cfg.factor_severidad_por_zona.get(str(poliza["zona_riesgo"]), (1.0, 1.0))
             )
 
             monto = float(np.exp(rng.normal(mu, sigma)))
@@ -381,7 +401,7 @@ def generar_siniestros(
 
             terceros = _terceros_involucrados(rng, tipo_danio)
             casco = _cobertura_casco(poliza["plan_cobertura"], tipo_danio)
-            cobertura_rc = tipo_danio == "Daño a terceros" or (tipo_danio == "Choque" and terceros)
+            cobertura_rc = tipo_danio in _DANIOS_RC or (tipo_danio == "Choque" and terceros)
 
             if casco and not cobertura_rc:
                 categoria_siniestro = "Casco"
@@ -436,7 +456,7 @@ def generar_siniestros(
                 rng, cfg, monto, en_mediacion, en_juicio, estado
             )
             motivo_rechazo = _asignar_motivo_rechazo(
-                rng, cfg, estado, casco, poliza["plan_cobertura"], meses_mora
+                rng, cfg, estado, casco, poliza["plan_cobertura"], meses_mora, lag_denuncia
             )
 
             rows.append(

@@ -44,7 +44,9 @@ def calcular_prima_y_premio(df: pd.DataFrame, cfg: Config, rng: np.random.Genera
     """
     n = len(df)
     tasa_base = rng.uniform(*cfg.tasa_base_rango, size=n)
-    factor_cob = df["plan_cobertura"].map(cfg.factor_cobertura_tarifa).astype(float).values
+    factor_cob = np.array(
+        [rng.uniform(*cfg.factor_cobertura_tarifa[c]) for c in df["plan_cobertura"].values]
+    )
     factor_z = np.array(
         [rng.uniform(*cfg.factor_prima_por_zona[z]) for z in df["zona_riesgo"].values]
     )

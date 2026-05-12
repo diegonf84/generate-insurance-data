@@ -21,7 +21,7 @@ def sample_mora(
         return 0
 
     probs = np.array([0.70, 0.15, 0.08, 0.05, 0.02], dtype=float)
-    if zona in {"Muy Alta", "Alta"}:
+    if zona in {"CABA Premium", "CABA Resto", "GBA Norte", "GBA Sur/Oeste"}:
         probs += np.array([-0.05, 0.02, 0.01, 0.01, 0.01])
     elif zona == "Media-Alta":
         probs += np.array([-0.03, 0.01, 0.01, 0.005, 0.005])
