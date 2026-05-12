@@ -124,12 +124,31 @@ Listas de barrios para pólizas de CABA y GBA respectivamente. Son puramente des
 
 ## 6. Factores de tarificación
 
-### `factor_zona`
+### Los tres efectos de la zona
+
+La zona de riesgo (Muy Alta / Alta / Media-Alta / Media / Baja) afecta tres dimensiones distintas e independientes. No es duplicación — cada dict modela un efecto actuarial distinto:
+
+| Parámetro | Qué modifica | Dónde se aplica |
+|---|---|---|
+| `factor_prima_por_zona` | Precio cobrado al cliente | `tarifa.py` al calcular `prima` |
+| `factor_frecuencia_por_zona` | Cuán seguido ocurren siniestros (λ Poisson) | `siniestros.py` en `_lambda_por_segmento` |
+| `factor_severidad_por_zona` | Cuánto cuesta cada siniestro | `siniestros.py` sobre `monto_reclamado` |
+
+Ejemplo: en CABA cobramos más caro (prima ×1.5) porque ocurren más siniestros (λ=0.22 vs 0.08 en zona Baja) y porque cuestan más cuando ocurren (severidad ×1.25). Los tres efectos se calibran independientemente.
+
+### `factor_prima_por_zona`
 Rango uniforme del multiplicador de zona aplicado a la **prima** (no al siniestro):
 ```
-prima ∝ suma_asegurada × tasa_base × factor_zona × ...
+prima ∝ suma_asegurada × tasa_base × factor_prima_por_zona × ...
 ```
 Tiene 5 claves: Muy Alta, Alta, Media-Alta, Media, Baja. Subir los rangos de zona Muy Alta/Alta → primas más altas en CABA/GBA → mejora el LR de esos segmentos.
+
+### `factor_frecuencia_por_zona`
+Lambda base de la Poisson de siniestros, indexada por zona. Es el parámetro de **frecuencia** (no de severidad ni de prima):
+- Muy Alta: 0.22 → ~22% probabilidad de un siniestro al año por póliza base, antes de modificadores.
+- Alta: 0.18 / Media-Alta: 0.15 / Media: 0.12 / Baja: 0.08.
+
+Después se le aplican multiplicadores por edad, uso, tipo de vehículo, plan y demografía. Bajar todos los valores → menos siniestros globales → mejor LR. Aumentar el spread → diferencias más marcadas de frecuencia entre zonas.
 
 ### `factor_severidad_por_zona`
 Multiplicador aplicado al **monto del siniestro** (no a la prima). Tiene 5 claves:
@@ -351,9 +370,9 @@ Al modificar los parámetros, respetar estas dependencias:
 
 2. **Tipos de daño**: Los 7 tipos (`Robo total`, `Robo parcial`, `Choque`, `Incendio`, `Granizo`, `Daño a terceros`, `Otros`) deben existir como claves en `prob_tipo_danio_por_zona`, `severidad_lognormal`, `prob_tipo_danio_moto` y `severidad_lognormal_moto`. También están hardcodeados en `_PESOS_MES_DANIO` en `siniestros.py`.
 
-3. **GBA localities**: Las localidades de Buenos Aires que deben disparar zona Alta están en `_GBA_LOCALIDADES` (frozenset en `polizas.py`). Las ciudades que deben disparar zona Media-Alta están en `_CIUDADES_MEDIA_ALTA`. Si se agregan localidades, actualizar el frozenset correspondiente.
+3. **GBA localities**: Las localidades de Buenos Aires que deben disparar zona Alta están en `GBA_LOCALIDADES` (frozenset en `generadores/geografia.py`). Las ciudades que deben disparar zona Media-Alta están en `CIUDADES_MEDIA_ALTA`. Si se agregan localidades, actualizar el frozenset correspondiente.
 
-5. **Zone dict key alignment**: todos los dicts con claves de zona (`factor_zona`, `factor_severidad_por_zona`, `prob_tipo_danio_por_zona`) deben tener las mismas 5 claves: `Muy Alta`, `Alta`, `Media-Alta`, `Media`, `Baja`.
+5. **Zone dict key alignment**: todos los dicts con claves de zona (`factor_prima_por_zona`, `factor_frecuencia_por_zona`, `factor_severidad_por_zona`, `prob_tipo_danio_por_zona`) deben tener las mismas 5 claves: `Muy Alta`, `Alta`, `Media-Alta`, `Media`, `Baja`.
 
 4. **`inflacion_anual`**: debe tener una entrada para cada año entre `fecha_inicio.year` y `fecha_fin.year`. Si se extiende `fecha_fin` a 2025, agregar `2025: <factor>`.
 

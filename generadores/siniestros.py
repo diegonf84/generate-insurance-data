@@ -31,21 +31,12 @@ def _sample_weighted(rng: np.random.Generator, pesos: dict[str, float]) -> str:
     return str(rng.choice(vals, p=probs))
 
 
-_LAMBDA_BASE_ZONA: dict[str, float] = {
-    "Muy Alta": 0.22,
-    "Alta": 0.18,
-    "Media-Alta": 0.15,
-    "Media": 0.12,
-    "Baja": 0.08,
-}
-
-
 def _lambda_por_segmento(row: pd.Series, cfg: Config) -> float:
     zona = row["zona_riesgo"]
     edad = int(row["edad_asegurado"])
     uso = row["tipo_uso"]
 
-    lam = _LAMBDA_BASE_ZONA.get(zona, 0.12)
+    lam = cfg.factor_frecuencia_por_zona.get(zona, 0.12)
 
     # Age + usage modifier
     if edad < 25 and uso in {"Comercial", "Profesional"}:
@@ -81,27 +72,69 @@ def _lambda_por_segmento(row: pd.Series, cfg: Config) -> float:
     return lam
 
 
+def _construir_pesos_lag(cfg: Config, dias_total: int) -> np.ndarray:
+    """Build per-day lag weights over [0, dias_total] from the mixture in cfg.
+
+    Each regime contributes uniformly within its day range; total mass
+    matches the regime's `peso`. Days outside any defined range get the
+    "normal" regime weight as fallback.
+    """
+    pesos = np.zeros(dias_total + 1, dtype=float)
+    normal_per_day = 0.0
+    for regimen in cfg.pesos_lag_siniestro.values():
+        lo, hi = regimen["rango_dias"]
+        peso_total = regimen["peso"]
+        span = hi - lo + 1
+        per_day = peso_total / span
+        d_lo = max(0, lo)
+        d_hi = min(dias_total, hi)
+        if d_hi >= d_lo:
+            pesos[d_lo : d_hi + 1] = per_day
+        if lo <= 91 <= hi:
+            normal_per_day = per_day
+    # Fallback for any day past the last defined range (e.g. policies > 365 days)
+    if normal_per_day > 0:
+        pesos[pesos == 0.0] = normal_per_day
+    if pesos.sum() == 0:
+        pesos[:] = 1.0
+    return pesos
+
+
 def _sample_fecha_siniestro(
     rng: np.random.Generator,
     inicio: date,
     fin: date,
     tipo_danio: str,
+    cfg: Config,
 ) -> date:
-    dias_total = max(1, (fin - inicio).days)
+    """Sample claim date combining month-of-year seasonality and lag-from-start.
+
+    Per-day weight = peso_lag(d) * peso_mes(month(inicio + d)), normalized over
+    [inicio, fin]. The lag mixture comes from cfg.pesos_lag_siniestro; the
+    monthly weights from _PESOS_MES_DANIO.
+    """
+    dias_total = max(0, (fin - inicio).days)
+    if dias_total == 0:
+        return inicio
+
+    pesos_lag = _construir_pesos_lag(cfg, dias_total)
     pesos_mes = _PESOS_MES_DANIO.get(tipo_danio)
 
     if pesos_mes is not None:
-        anos_candidatos = list({inicio.year, fin.year})
-        for _ in range(20):
-            mes = int(rng.choice(np.arange(1, 13), p=pesos_mes))
-            anio = int(rng.choice(anos_candidatos))
-            dias_en_mes = calendar.monthrange(anio, mes)[1]
-            dia = int(rng.integers(1, dias_en_mes + 1))
-            candidata = date(anio, mes, dia)
-            if inicio <= candidata <= fin:
-                return candidata
+        meses = np.array(
+            [(inicio + timedelta(days=int(d))).month for d in range(dias_total + 1)]
+        )
+        pesos_mes_arr = np.array(pesos_mes)[meses - 1]
+        pesos = pesos_lag * pesos_mes_arr
+    else:
+        pesos = pesos_lag
 
-    return inicio + timedelta(days=int(rng.integers(0, dias_total + 1)))
+    total = pesos.sum()
+    if total <= 0:
+        return inicio + timedelta(days=int(rng.integers(0, dias_total + 1)))
+    pesos = pesos / total
+    dia_offset = int(rng.choice(dias_total + 1, p=pesos))
+    return inicio + timedelta(days=dia_offset)
 
 
 def _terceros_involucrados(rng: np.random.Generator, tipo_danio: str) -> bool:
@@ -290,6 +323,7 @@ def generar_siniestros(
                 poliza["fecha_inicio_vigencia"],
                 fecha_fin_efectiva,
                 tipo_danio,
+                cfg,
             )
             lag_denuncia = int(min(30, max(0, round(rng.exponential(5.0)))))
             fecha_denuncia = min(today, fecha_siniestro + timedelta(days=lag_denuncia))

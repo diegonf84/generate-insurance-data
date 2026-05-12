@@ -294,13 +294,27 @@ class Config:
         ]
     )
 
-    factor_zona: dict[str, tuple[float, float]] = field(
+    # Zone factors — three independent effects of risk zone:
+    # - factor_prima_por_zona: multiplier on the policy PREMIUM (price charged).
+    # - factor_frecuencia_por_zona: base Poisson lambda for claim FREQUENCY.
+    # - factor_severidad_por_zona: multiplier on each claim AMOUNT (severity).
+    factor_prima_por_zona: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
             "Muy Alta": (1.40, 1.60),
             "Alta": (1.25, 1.45),
             "Media-Alta": (1.10, 1.25),
             "Media": (0.95, 1.10),
             "Baja": (0.70, 0.90),
+        }
+    )
+
+    factor_frecuencia_por_zona: dict[str, float] = field(
+        default_factory=lambda: {
+            "Muy Alta": 0.22,
+            "Alta": 0.18,
+            "Media-Alta": 0.15,
+            "Media": 0.12,
+            "Baja": 0.08,
         }
     )
 
@@ -359,6 +373,23 @@ class Config:
 
     inflacion_anual: dict[int, float] = field(
         default_factory=lambda: {2021: 1.0, 2022: 1.5, 2023: 2.5, 2024: 4.0}
+    )
+
+    # ── Lag de siniestros (días desde inicio de vigencia) ────────────────────
+    # Mezcla de 4 regímenes que controla cuán probable es que un siniestro
+    # ocurra cerca o lejos del inicio de la póliza. Los pesos se multiplican
+    # con la estacionalidad mensual (_PESOS_MES_DANIO) — ambos efectos coexisten.
+    # - extremo: siniestros casi inmediatos → señal de fraude.
+    # - temprano: poco común (poca exposición acumulada).
+    # - adaptacion: aún por debajo de lo natural los primeros meses.
+    # - normal: el grueso de los siniestros, sin suprimir.
+    pesos_lag_siniestro: dict[str, dict] = field(
+        default_factory=lambda: {
+            "extremo":    {"rango_dias": (0, 7),    "peso": 0.01},
+            "temprano":   {"rango_dias": (8, 30),   "peso": 0.04},
+            "adaptacion": {"rango_dias": (31, 90),  "peso": 0.10},
+            "normal":     {"rango_dias": (91, 365), "peso": 0.85},
+        }
     )
 
     prob_tipo_danio_por_zona: dict[str, dict[str, float]] = field(
